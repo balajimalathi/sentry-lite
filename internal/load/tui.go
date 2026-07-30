@@ -39,18 +39,20 @@ type healthMsg HealthSnapshot
 type runDoneMsg struct{}
 
 type Model struct {
-	cfg       Config
-	runner    *Runner
-	screen    screen
-	focus     field
-	editing   bool
-	editBuf   string
-	status    string
-	quitting  bool
+	cfg        Config
+	runner     *Runner
+	screen     screen
+	focus      field
+	editing    bool
+	editBuf    string
+	status     string
+	quitting   bool
+	width      int
 
-	health    HealthSnapshot
+	health     HealthSnapshot
 	wasHealthy bool
-	rate      RateTracker
+	rate       RateTracker
+	baseline   RunBaselines
 }
 
 func NewModel(cfg Config) Model {
@@ -58,34 +60,52 @@ func NewModel(cfg Config) Model {
 		cfg:    cfg,
 		runner: NewRunner(cfg),
 		screen: screenSetup,
+		width:  100,
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(tickCmd(), healthCmd(m.cfg))
+	return tea.Batch(tickCmd(), healthCmd(m.cfg, true), resourceTickCmd())
+}
+
+func healthCmd(cfg Config, fullDisk bool) tea.Cmd {
+	return func() tea.Msg {
+		client := NewClient(cfg)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		ok, lat, err := client.Health(ctx)
+		var res ResourceSnapshot
+		if fullDisk {
+			res = CollectResources(cfg.DataDir)
+		} else {
+			res = CollectResourcesLight()
+		}
+		h := HealthSnapshot{
+			At:          time.Now(),
+			OK:          ok,
+			Latency:     lat,
+			DataBytes:   res.DataBytes,
+			SQLiteBytes: res.SQLiteBytes,
+			EventFiles:  res.EventFiles,
+			Resource:    res,
+			FullDisk:    fullDisk,
+		}
+		if err != nil {
+			h.Err = err.Error()
+		}
+		return healthMsg(h)
+	}
 }
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(500*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-func healthCmd(cfg Config) tea.Cmd {
-	return func() tea.Msg {
-		client := NewClient(cfg)
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		ok, lat, err := client.Health(ctx)
-		h := HealthSnapshot{At: time.Now(), OK: ok, Latency: lat}
-		if err != nil {
-			h.Err = err.Error()
-		}
-		data, sqlite, events := CollectDisk(cfg.DataDir)
-		h.DataBytes = data
-		h.SQLiteBytes = sqlite
-		h.EventFiles = events
-		return healthMsg(h)
-	}
+func resourceTickCmd() tea.Cmd {
+	return tea.Tick(2*time.Second, func(t time.Time) tea.Msg { return resourceTickMsg(t) })
 }
+
+type resourceTickMsg time.Time
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
@@ -103,11 +123,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tickMsg:
-		cmds := []tea.Cmd{tickCmd(), healthCmd(m.cfg)}
-		if m.screen == screenRun && m.runner.State() == StateDone {
-			return m, tea.Batch(cmds...)
-		}
-		return m, tea.Batch(cmds...)
+		return m, tea.Batch(tickCmd(), healthCmd(m.cfg, false))
+
+	case resourceTickMsg:
+		return m, tea.Batch(resourceTickCmd(), healthCmd(m.cfg, true))
 
 	case healthMsg:
 		h := HealthSnapshot(msg)
@@ -118,7 +137,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if h.OK {
 			m.wasHealthy = true
 		}
+		if !h.FullDisk {
+			// keep previous disk numbers when light poll
+			prev := m.health.Resource
+			h.Resource.MergeDisk(prev)
+			h.DataBytes = prev.DataBytes
+			h.SQLiteBytes = prev.SQLiteBytes
+			h.EventFiles = prev.EventFiles
+		}
 		m.health = h
+		if m.screen == screenRun {
+			st := m.runner.State()
+			if st == StateRunning || st == StatePaused || st == StateCrashProbe || st == StateDone {
+				m.baseline.Observe(h.Resource)
+			}
+		}
 		return m, nil
 
 	case runDoneMsg:
@@ -126,6 +159,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.WindowSizeMsg:
+		m.width = msg.Width
 		return m, nil
 	}
 	return m, nil
@@ -259,6 +293,8 @@ func (m *Model) startRun() (Model, tea.Cmd) {
 	m.screen = screenRun
 	m.status = "running"
 	m.wasHealthy = m.health.OK
+	m.baseline = RunBaselines{}
+	m.baseline.Observe(m.health.Resource)
 	return *m, tickCmd()
 }
 
@@ -376,6 +412,12 @@ func (m Model) viewSetup() string {
 		b.WriteString("\n" + styleSubtle.Render(m.status) + "\n")
 	}
 	b.WriteString("\n" + m.viewHealthBrief())
+	res := m.health.Resource
+	if res.APIFound || res.DataBytes > 0 {
+		b.WriteString("\n")
+		b.WriteString(styleSubtle.Render(fmt.Sprintf("  api %s · data/ %s · free %s · files %d",
+			fmtBytes(res.APIRSS), fmtBytes(res.DataBytes), fmtBytes(res.DiskFree), res.EventFiles)))
+	}
 	b.WriteString("\n\n")
 	b.WriteString(styleMuted.Render("↑↓ field · space edit · enter start · q quit"))
 	return styleOuter.Padding(1, 2).Render(b.String())
@@ -391,6 +433,10 @@ func (m Model) viewRun() string {
 	inst := m.rate.Update(sent)
 	avg := m.rate.Avg(sent, elapsed)
 	p50, p95, p99 := c.Percentiles()
+	w := m.width - 4
+	if w < 72 {
+		w = 72
+	}
 
 	var b strings.Builder
 	b.WriteString(m.viewHeader(sent, elapsed))
@@ -400,31 +446,51 @@ func (m Model) viewRun() string {
 		b.WriteString(styleBadgeBad.Render("API CRASH / UNREACHABLE") + "\n\n")
 	}
 
-	b.WriteString(styleSection.Render("Throughput") + "\n")
-	b.WriteString(fmt.Sprintf("  sent %s / %s   ok %s   4xx %s   5xx %s   timeout %s   in-flight %s\n",
-		styleFg.Render(formatInt(sent)),
-		formatInt(m.cfg.Total),
-		formatInt(c.OK.Load()),
-		formatInt(c.Err4xx.Load()),
-		formatInt(c.Err5xx.Load()),
-		formatInt(c.Timeout.Load()),
-		formatInt(c.InFlight.Load()),
+	// Progress toward total
+	var progressPct float64
+	if m.cfg.Total > 0 {
+		progressPct = float64(sent) / float64(m.cfg.Total)
+	}
+	b.WriteString(styleMuted.Render("progress     ") + progressBar(progressPct, maxInt(24, w-28)) + "\n")
+	b.WriteString(styleSubtle.Render(fmt.Sprintf("             %s / %s events", formatInt(sent), formatInt(m.cfg.Total))) + "\n")
+
+	cardW := maxInt(14, (w-8)/4)
+	b.WriteString("\n")
+	b.WriteString(lipgloss.JoinHorizontal(lipgloss.Top,
+		miniCard("sent", formatInt(sent), fmt.Sprintf("ok %s", formatInt(c.OK.Load())), cardW),
+		miniCard("rps", fmt.Sprintf("%.0f", inst), fmt.Sprintf("avg %.0f", avg), cardW),
+		miniCard("latency", p50.Round(time.Millisecond).String(), fmt.Sprintf("p95 %s  p99 %s", p95.Round(time.Millisecond), p99.Round(time.Millisecond)), cardW),
+		miniCard("errors", formatInt(c.Err5xx.Load()+c.Timeout.Load()+c.OtherErr.Load()), fmt.Sprintf("4xx %s  in-flight %s", formatInt(c.Err4xx.Load()), formatInt(c.InFlight.Load())), cardW),
 	))
-	b.WriteString(fmt.Sprintf("  rps instant %.0f   avg %.0f   elapsed %s\n", inst, avg, elapsed.Round(time.Second)))
-	b.WriteString(fmt.Sprintf("  latency p50 %s   p95 %s   p99 %s\n", p50.Round(time.Millisecond), p95.Round(time.Millisecond), p99.Round(time.Millisecond)))
+	b.WriteString("\n")
+
+	b.WriteString("\n" + renderResourcePanel(m.health.Resource, m.baseline, elapsed, w))
 
 	b.WriteString("\n" + styleSection.Render("By feature") + "\n")
+	var featParts []string
 	for i := 0; i < int(catCount); i++ {
 		n := c.ByCat[i].Load()
 		if n > 0 {
-			b.WriteString(fmt.Sprintf("  %-14s %s\n", Category(i).String(), formatInt(n)))
+			featParts = append(featParts, styleChip.Render(fmt.Sprintf("%s %s", Category(i).String(), formatInt(n))))
 		}
 	}
+	if len(featParts) > 0 {
+		b.WriteString("  " + strings.Join(featParts, " ") + "\n")
+	}
 
-	b.WriteString("\n" + m.viewHealthDetail())
+	apiLine := styleBadgeOK.Render("healthz ok")
+	if !m.health.OK {
+		apiLine = styleBadgeBad.Render("healthz fail")
+		if m.health.Err != "" {
+			apiLine += " " + styleSubtle.Render(m.health.Err)
+		}
+	} else {
+		apiLine += styleMuted.Render(fmt.Sprintf("  %s", m.health.Latency.Round(time.Millisecond)))
+	}
+	b.WriteString("\n  " + apiLine + "\n")
 
 	if m.status != "" {
-		b.WriteString("\n\n" + styleSubtle.Render(m.status))
+		b.WriteString("\n" + styleSubtle.Render(m.status))
 	}
 	b.WriteString("\n\n")
 	b.WriteString(styleMuted.Render(kbd("s") + " start/stop · " + kbd("p") + " pause · " + kbd("k") + " crash probe · " + kbd("q") + " quit"))
@@ -469,19 +535,6 @@ func (m Model) viewHealthBrief() string {
 	return styleBadgeWarn.Render("○ api unknown")
 }
 
-func (m Model) viewHealthDetail() string {
-	var b strings.Builder
-	b.WriteString(styleSection.Render("Health / storage") + "\n")
-	if m.health.OK {
-		b.WriteString(fmt.Sprintf("  healthz %s (%s)\n", "ok", m.health.Latency.Round(time.Millisecond)))
-	} else {
-		b.WriteString(fmt.Sprintf("  healthz FAIL: %s\n", m.health.Err))
-	}
-	b.WriteString(fmt.Sprintf("  data/ %s   sqlite %s   event files %d\n",
-		fmtBytes(m.health.DataBytes), fmtBytes(m.health.SQLiteBytes), m.health.EventFiles))
-	return b.String()
-}
-
 func formatInt(n int64) string {
 	if n < 0 {
 		return "0"
@@ -512,31 +565,65 @@ func RunHeadless(cfg Config) error {
 		return err
 	}
 
+	var base RunBaselines
+	base.Observe(CollectResources(cfg.DataDir))
+
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-r.Done():
-			printHeadlessSummary(cfg, r)
+			printHeadlessSummary(cfg, r, base)
 			return nil
 		case <-ticker.C:
 			c := r.Counters()
-			fmt.Printf("\r sent=%d ok=%d 5xx=%d timeout=%d in-flight=%d",
-				c.Sent.Load(), c.OK.Load(), c.Err5xx.Load(), c.Timeout.Load(), c.InFlight.Load())
+			res := CollectResources(cfg.DataDir)
+			base.Observe(res)
+			fmt.Printf("\r sent=%d ok=%d 5xx=%d | api=%s (peak %s Δ%s) | data=%s (Δ%s) files=%d free=%s     ",
+				c.Sent.Load(), c.OK.Load(), c.Err5xx.Load(),
+				fmtBytes(res.APIRSS), fmtBytes(base.PeakAPIRSS), fmtDelta(res.APIRSS, base.APIRSS),
+				fmtBytes(res.DataBytes), fmtDelta(res.DataBytes, base.DataBytes),
+				res.EventFiles, fmtBytes(res.DiskFree))
 			if r.State() == StateDone {
-				printHeadlessSummary(cfg, r)
+				printHeadlessSummary(cfg, r, base)
 				return nil
 			}
 		}
 	}
 }
 
-func printHeadlessSummary(cfg Config, r *Runner) {
+func printHeadlessSummary(cfg Config, r *Runner, base RunBaselines) {
 	c := r.Counters()
 	p50, p95, p99 := c.Percentiles()
-	fmt.Printf("\n\ndone: sent=%d ok=%d 4xx=%d 5xx=%d timeout=%d p50=%s p95=%s p99=%s\n",
-		c.Sent.Load(), c.OK.Load(), c.Err4xx.Load(), c.Err5xx.Load(), c.Timeout.Load(),
-		p50.Round(time.Millisecond), p95.Round(time.Millisecond), p99.Round(time.Millisecond))
+	res := CollectResources(cfg.DataDir)
+	base.Observe(res)
+	elapsed := time.Since(r.StartedAt())
+	fmt.Printf("\n\n=== load summary ===\n")
+	fmt.Printf("sent=%d ok=%d 4xx=%d 5xx=%d timeout=%d\n",
+		c.Sent.Load(), c.OK.Load(), c.Err4xx.Load(), c.Err5xx.Load(), c.Timeout.Load())
+	fmt.Printf("latency p50=%s p95=%s p99=%s  elapsed=%s\n",
+		p50.Round(time.Millisecond), p95.Round(time.Millisecond), p99.Round(time.Millisecond),
+		elapsed.Round(time.Second))
+	fmt.Printf("\n--- RAM ---\n")
+	fmt.Printf("api rss now=%s  start=%s  peak=%s  Δ=%s\n",
+		fmtBytes(res.APIRSS), fmtBytes(base.APIRSS), fmtBytes(base.PeakAPIRSS), fmtDelta(res.APIRSS, base.APIRSS))
+	if res.HostTotalRAM > 0 {
+		fmt.Printf("host ram=%s / %s\n", fmtBytes(res.HostUsedRAM), fmtBytes(res.HostTotalRAM))
+	}
+	if res.RedpandaOK {
+		fmt.Printf("redpanda mem=%s cpu=%s\n", res.RedpandaMem, res.RedpandaCPU)
+	}
+	fmt.Printf("\n--- Storage ---\n")
+	fmt.Printf("data/ now=%s  start=%s  peak=%s  Δ=%s\n",
+		fmtBytes(res.DataBytes), fmtBytes(base.DataBytes), fmtBytes(base.PeakData), fmtDelta(res.DataBytes, base.DataBytes))
+	fmt.Printf("events/ now=%s  Δ=%s", fmtBytes(res.EventsBytes), fmtDelta(res.EventsBytes, base.EventsBytes))
+	if elapsed > 0 && res.EventsBytes >= base.EventsBytes {
+		fmt.Printf("  %s", fmtRate(res.EventsBytes-base.EventsBytes, elapsed))
+	}
+	fmt.Printf("\n")
+	fmt.Printf("sqlite=%s (Δ %s)  event files=%d (Δ %+d)  disk free=%s\n",
+		fmtBytes(res.SQLiteBytes), fmtDelta(res.SQLiteBytes, base.SQLiteBytes),
+		res.EventFiles, res.EventFiles-base.EventFiles, fmtBytes(res.DiskFree))
 }
 
 func RunTUI(cfg Config) error {

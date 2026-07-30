@@ -1,8 +1,6 @@
 package load
 
 import (
-	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -83,54 +81,10 @@ func (c *Counters) Percentiles() (p50, p95, p99 time.Duration) {
 	return p50, p95, p99
 }
 
-type HealthSnapshot struct {
-	At         time.Time
-	OK         bool
-	Latency    time.Duration
-	Err        string
-	WasHealthy bool
-	Crashed    bool
-	DataBytes  uint64
-	SQLiteBytes uint64
-	EventFiles int
-}
-
-func CollectDisk(dataDir string) (dataBytes, sqliteBytes uint64, eventFiles int) {
-	dataDir = filepath.Clean(dataDir)
-	_ = filepath.Walk(dataDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
-			return nil
-		}
-		size := uint64(info.Size())
-		dataBytes += size
-		base := filepath.Base(path)
-		if base == "sentry-lite.db" || base == "sentry-lite.db-wal" || base == "sentry-lite.db-shm" {
-			sqliteBytes += size
-		}
-		if filepath.Base(filepath.Dir(path)) != "" && filepath.Base(filepath.Dir(path)) != "data" {
-			if filepath.Ext(path) == ".json" {
-				eventFiles++
-			}
-		}
-		return nil
-	})
-	eventsDir := filepath.Join(dataDir, "events")
-	_ = filepath.Walk(eventsDir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
-			return nil
-		}
-		if filepath.Ext(path) == ".json" {
-			eventFiles++
-		}
-		return nil
-	})
-	return dataBytes, sqliteBytes, eventFiles
-}
-
 type RateTracker struct {
-	lastAt    time.Time
-	lastSent  int64
-	instant   float64
+	lastAt   time.Time
+	lastSent int64
+	instant  float64
 }
 
 func (r *RateTracker) Update(sent int64) float64 {

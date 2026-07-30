@@ -26,7 +26,7 @@ Setup screen: configure mode, total, workers, RPS, DSN. Press **Enter** to start
 | `k` | Crash probe — flood API at max concurrency |
 | `q` | Quit |
 
-Live panels show throughput, latency percentiles, per-feature counts, `healthz` status, and `data/` disk usage. A **crash banner** appears when the API was healthy then becomes unreachable.
+Live panels show throughput, latency percentiles, per-feature counts, **API/host/Redpanda RAM**, `data/` growth (Δ from run start + peak), disk free, and a crash banner if the API drops.
 
 ## Headless (CI / scripted)
 
@@ -72,9 +72,11 @@ Traffic goes to `POST /api/{project}/store/` with `X-Sentry-Auth` — same path 
 
 ## What to watch
 
-- **TUI / headless**: sent/ok/5xx/timeout, p50/p95/p99, in-flight
+- **TUI / headless**: sent/ok/5xx/timeout, p50/p95/p99, **API RAM (Δ + peak)**, host RAM, Redpanda mem, `data/` / `events/` growth, disk free
 - **Triage UI**: Issues, Performance, Releases, Crons, Alerts
 - **Disk**: `./data/events/` grows ~one JSON file per event; 1M events can use significant disk
+
+Restart the load TUI after rebuilding to pick up the new RAM/storage cards.
 
 ## Env
 
