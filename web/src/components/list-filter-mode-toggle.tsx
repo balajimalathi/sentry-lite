@@ -4,14 +4,12 @@ import {
   SlidersHorizontalIcon,
   TerminalIcon,
 } from 'lucide-react'
-import { Button } from '@/components/ui/button'
-import { ButtonGroup } from '@/components/ui/button-group'
 import { PageHeaderActionLabel } from '@/components/page-header'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import {
   onListFilterModeChange,
   type ListFilterMode,
 } from '@/hooks/use-list-filter-mode'
-import { cn } from '@/lib/utils'
 
 const MODES: {
   value: ListFilterMode
@@ -42,38 +40,39 @@ export function ListFilterModeToggle<TData>({
   clearBasic,
   table,
 }: ListFilterModeToggleProps<TData>) {
+  function handleValueChange(next: string[]) {
+    onListFilterModeChange({
+      next: next[0] as ListFilterMode | undefined,
+      current: filterMode,
+      setFilterMode,
+      clearAdvanced,
+      clearBasic,
+      table,
+    })
+  }
+
   return (
-    <ButtonGroup aria-label="Filter mode">
+    <ToggleGroup
+      value={[filterMode]}
+      onValueChange={handleValueChange}
+      variant="outline"
+      size="sm"
+      spacing={0}
+      aria-label="Filter mode"
+    >
       {MODES.map((mode) => {
         const Icon = mode.icon
         return (
-          <Button
+          <ToggleGroupItem
             key={mode.value}
-            type="button"
-            size="sm"
-            variant="outline"
+            value={mode.value}
             aria-label={mode.label}
-            aria-pressed={filterMode === mode.value}
-            className={cn(
-              filterMode === mode.value &&
-                'bg-primary/25 text-foreground hover:bg-primary/25 hover:text-foreground',
-            )}
-            onClick={() =>
-              onListFilterModeChange({
-                next: mode.value,
-                current: filterMode,
-                setFilterMode,
-                clearAdvanced,
-                clearBasic,
-                table,
-              })
-            }
           >
             <Icon data-icon="inline-start" />
             <PageHeaderActionLabel>{mode.label}</PageHeaderActionLabel>
-          </Button>
+          </ToggleGroupItem>
         )
       })}
-    </ButtonGroup>
+    </ToggleGroup>
   )
 }

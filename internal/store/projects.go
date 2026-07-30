@@ -79,6 +79,15 @@ func randomKey() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+func (s *Store) ProjectExists(ctx context.Context, projectID int64) (bool, error) {
+	if projectID <= 0 {
+		return false, nil
+	}
+	var n int64
+	err := s.DB.WithContext(ctx).Model(&ProjectRow{}).Where("id = ?", projectID).Count(&n).Error
+	return n > 0, err
+}
+
 func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string, allowedOrigins []string) (*CreatedProject, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {

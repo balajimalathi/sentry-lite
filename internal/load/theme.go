@@ -104,7 +104,7 @@ func progressBar(pct float64, width int) string {
 	return bar + styleMuted.Render(fmt.Sprintf(" %4.1f%%", pct*100))
 }
 
-func renderResourcePanel(r ResourceSnapshot, base RunBaselines, elapsed time.Duration, width int) string {
+func renderResourcePanel(r ResourceSnapshot, base RunBaselines, _ time.Duration, width int) string {
 	if width < 60 {
 		width = 60
 	}
@@ -169,32 +169,15 @@ func renderResourcePanel(r ResourceSnapshot, base RunBaselines, elapsed time.Dur
 		b.WriteString(styleMuted.Render("data vs free ") + progressBar(pct, maxInt(20, width-28)) + "\n")
 	}
 
-	// Detail row
-	eventsDelta := ""
-	if base.Set {
-		eventsDelta = "  " + styleCardDelta.Render(fmtDelta(r.EventsBytes, base.EventsBytes))
-		if elapsed > 0 && r.EventsBytes >= base.EventsBytes {
-			eventsDelta += styleSubtle.Render("  " + fmtRate(r.EventsBytes-base.EventsBytes, elapsed))
-		}
-	}
+	// Detail row — events/ is not scanned (can be millions of files under load).
 	sqliteDelta := ""
 	if base.Set {
 		sqliteDelta = "  " + styleCardDelta.Render(fmtDelta(r.SQLiteBytes, base.SQLiteBytes))
 	}
-	filesDelta := ""
-	if base.Set {
-		d := r.EventFiles - base.EventFiles
-		sign := "+"
-		if d < 0 {
-			sign = ""
-		}
-		filesDelta = "  " + styleCardDelta.Render(fmt.Sprintf("%s%d", sign, d))
-	}
 
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("  %-12s %s%s\n", "events/", styleFg.Render(fmtBytes(r.EventsBytes)), eventsDelta))
+	b.WriteString(fmt.Sprintf("  %-12s %s\n", "events/", styleSubtle.Render("skipped (too large to scan)")))
 	b.WriteString(fmt.Sprintf("  %-12s %s%s\n", "sqlite", styleFg.Render(fmtBytes(r.SQLiteBytes)), sqliteDelta))
-	b.WriteString(fmt.Sprintf("  %-12s %s%s\n", "event files", styleFg.Render(formatInt(int64(r.EventFiles))), filesDelta))
 	b.WriteString(fmt.Sprintf("  %-12s %s\n", "disk free", styleFg.Render(fmtBytes(r.DiskFree))))
 	if r.APIFound {
 		b.WriteString(fmt.Sprintf("  %-12s %s\n", "api pid", styleSubtle.Render(fmt.Sprintf("%d", r.APIPID))))

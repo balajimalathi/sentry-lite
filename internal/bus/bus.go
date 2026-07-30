@@ -58,6 +58,11 @@ func New(brokers []string, topic string) (*Bus, error) {
 }
 
 func (b *Bus) Produce(ctx context.Context, key, value []byte) error {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+	}
 	r := &kgo.Record{Topic: b.Topic, Key: key, Value: value}
 	return b.Producer.ProduceSync(ctx, r).FirstErr()
 }

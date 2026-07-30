@@ -48,6 +48,8 @@ func (h *Handler) Routes(r chi.Router) {
 		r.Patch("/crons/{id}", h.UpdateCron)
 		r.Delete("/crons/{id}", h.DeleteCron)
 
+		r.Get("/stats", h.GetStats)
+
 		r.Get("/meta", h.Meta)
 	})
 
@@ -531,6 +533,63 @@ func (h *Handler) CronCheckIn(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, updated)
+}
+
+func (h *Handler) GetStats(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	var projectID int64
+	if v := q.Get("project_id"); v != "" {
+		id, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || id < 0 {
+			http.Error(w, "invalid project_id", http.StatusBadRequest)
+			return
+		}
+		projectID = id
+	}
+
+	now := time.Now().UTC()
+	to := now
+	if v := q.Get("to"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			t, err = time.Parse(time.RFC3339Nano, v)
+		}
+		if err != nil {
+			http.Error(w, "invalid to", http.StatusBadRequest)
+			return
+		}
+		to = t.UTC()
+	}
+	from := to.Add(-24 * time.Hour)
+	if v := q.Get("from"); v != "" {
+		t, err := time.Parse(time.RFC3339, v)
+		if err != nil {
+			t, err = time.Parse(time.RFC3339Nano, v)
+		}
+		if err != nil {
+			http.Error(w, "invalid from", http.StatusBadRequest)
+			return
+		}
+		from = t.UTC()
+	}
+
+	interval, err := store.ParseStatsInterval(q.Get("interval"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	stats, err := h.Store.DashboardStats(r.Context(), store.DashboardStatsFilter{
+		ProjectID: projectID,
+		From:      from,
+		To:        to,
+		Interval:  interval,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, stats)
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

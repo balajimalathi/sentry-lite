@@ -157,6 +157,21 @@ export type AlertRule = {
   created_at: string
 }
 
+export type StatsBucket = {
+  t: string
+  events: number
+}
+
+export type DashboardStats = {
+  unresolved: number
+  events: number
+  regressions: number
+  crons_unhealthy: number
+  by_status: Record<string, number>
+  series: StatsBucket[]
+  top_issues: Issue[]
+}
+
 function handleUnauthorized(res: Response) {
   if (res.status !== 401) return
   clearAdminToken()
@@ -305,6 +320,19 @@ export const api = {
   deleteCron: async (id: number) => {
     const res = await apiFetch(`/api/internal/crons/${id}`, { method: 'DELETE' })
     if (!res.ok) throw new Error(`${res.status}`)
+  },
+  stats: (params: {
+    project_id?: string
+    from: string
+    to: string
+    interval?: string
+  }) => {
+    const q = new URLSearchParams()
+    if (params.project_id) q.set('project_id', params.project_id)
+    q.set('from', params.from)
+    q.set('to', params.to)
+    if (params.interval) q.set('interval', params.interval)
+    return get<DashboardStats>(`/api/internal/stats?${q}`)
   },
 }
 

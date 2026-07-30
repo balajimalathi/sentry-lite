@@ -10,9 +10,11 @@ services:
       - --reserve-memory=0M
       - --node-id=0
       - --check=false
-      - --kafka-addr=internal://0.0.0.0:9092
-      - --advertise-kafka-addr=internal://redpanda:9092
-    # No host ports — Kafka is reachable only on sentry-lite-net as redpanda:9092
+      # Dual listeners: Docker network (app) + loopback (host go run / TUI / load)
+      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:19092
+    ports:
+      - "127.0.0.1:19092:19092"
     volumes:
       - redpanda_data:/var/lib/redpanda/data
     networks:

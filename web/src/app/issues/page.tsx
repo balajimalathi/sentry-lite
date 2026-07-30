@@ -139,6 +139,7 @@ export default function IssuesPage() {
       {
         id: 'title',
         accessorKey: 'title',
+        size: 280,
         enableColumnFilter: true,
         meta: {
           label: 'Title',
@@ -149,7 +150,7 @@ export default function IssuesPage() {
           <DataTableColumnHeader column={column} label="Title" />
         ),
         cell: ({ row }) => (
-          <div className="flex max-w-xs flex-wrap items-center gap-2 whitespace-normal">
+          <div className="flex max-w-sm flex-wrap items-center gap-2 whitespace-normal">
             <Link
               to={`/issues/${row.original.id}`}
               className="font-medium underline-offset-4 hover:underline"

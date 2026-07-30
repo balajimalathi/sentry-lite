@@ -125,11 +125,19 @@ func CollectDisk(dataDir string) (dataBytes, sqliteBytes uint64, eventFiles int)
 
 func collectDiskDetailed(dataDir string) (dataBytes, eventsBytes, sqliteBytes, diskFree uint64, eventFiles int) {
 	dataDir = filepath.Clean(dataDir)
-	eventsDir := filepath.Join(dataDir, "events")
+	if !filepath.IsAbs(dataDir) {
+		if abs, err := filepath.Abs(dataDir); err == nil {
+			dataDir = abs
+		}
+	}
 
-	dataBytes, _ = dirSize(dataDir)
-	eventsBytes, _ = dirSize(eventsDir)
-	eventFiles = countJSONFiles(eventsDir)
+	// Statfs does not list directory entries — safe even when events/ is huge.
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dataDir, &st); err == nil {
+		diskFree = uint64(st.Bavail) * uint64(st.Bsize)
+	} else if err := syscall.Statfs(".", &st); err == nil {
+		diskFree = uint64(st.Bavail) * uint64(st.Bsize)
+	}
 
 	for _, name := range []string{"sentry-lite.db", "sentry-lite.db-shm", "sentry-lite.db-wal"} {
 		if fi, err := os.Stat(filepath.Join(dataDir, name)); err == nil {
@@ -137,44 +145,27 @@ func collectDiskDetailed(dataDir string) (dataBytes, eventsBytes, sqliteBytes, d
 		}
 	}
 
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(dataDir, &st); err == nil {
-		diskFree = uint64(st.Bavail) * uint64(st.Bsize)
-	} else if err := syscall.Statfs(".", &st); err == nil {
-		diskFree = uint64(st.Bavail) * uint64(st.Bsize)
-	}
-	return
-}
-
-func dirSize(path string) (uint64, error) {
-	var total uint64
-	err := filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
-		if err != nil {
-			if os.IsNotExist(err) {
-				return nil
+	// Never recurse into events/ — under load it can hold millions of files and
+	// du/find/Walk will block the TUI for minutes, leaving all disk stats at 0.
+	// data/ card ≈ sqlite + other top-level files only.
+	dataBytes = sqliteBytes
+	if ents, err := os.ReadDir(dataDir); err == nil {
+		for _, e := range ents {
+			name := e.Name()
+			if name == "events" || strings.HasPrefix(name, "sentry-lite.db") {
+				continue
 			}
-			return err
+			info, err := e.Info()
+			if err != nil || info.IsDir() {
+				continue
+			}
+			dataBytes += uint64(info.Size())
 		}
-		if info != nil && !info.IsDir() {
-			total += uint64(info.Size())
-		}
-		return nil
-	})
-	return total, err
-}
+	}
 
-func countJSONFiles(path string) int {
-	n := 0
-	_ = filepath.Walk(path, func(_ string, info os.FileInfo, err error) error {
-		if err != nil || info == nil || info.IsDir() {
-			return nil
-		}
-		if filepath.Ext(info.Name()) == ".json" {
-			n++
-		}
-		return nil
-	})
-	return n
+	eventsBytes = 0
+	eventFiles = 0
+	return
 }
 
 func findAPIProcess() (rss uint64, cpu float64, pid int, found bool) {
@@ -215,15 +206,22 @@ func findAPIProcess() (rss uint64, cpu float64, pid int, found bool) {
 
 func isAPICommand(cmd string) bool {
 	lower := strings.ToLower(cmd)
-	if strings.Contains(lower, "sentry-lite-load") {
+	// Exclude load/TUI and IDE helpers that mention the workspace name "sentry-lite".
+	switch {
+	case strings.Contains(lower, "sentry-lite-load"),
+		strings.Contains(lower, "sentry-lite-tui"),
+		strings.Contains(lower, "cursor helper"),
+		strings.Contains(lower, "extension-host"),
+		strings.Contains(lower, "cursor-agent"),
+		strings.Contains(lower, "language_server"):
 		return false
 	}
-	if strings.Contains(lower, "sentry-lite-tui") {
-		return false
-	}
-	return strings.Contains(lower, "sentry-lite") ||
+	return strings.Contains(cmd, "/exe/sentry-lite") ||
 		strings.Contains(cmd, "./cmd/sentry-lite") ||
-		strings.Contains(cmd, "/cmd/sentry-lite")
+		strings.Contains(cmd, "/cmd/sentry-lite") ||
+		(strings.Contains(lower, "sentry-lite") &&
+			!strings.Contains(lower, "cursor") &&
+			!strings.Contains(lower, "helper"))
 }
 
 func redpandaStats(composeFile string) (mem, memPct, cpu string, ok bool) {

@@ -26,7 +26,7 @@ cp .env.example .env
 docker compose -f docker-compose.redpanda.yml up -d
 ```
 
-Kafka listens only on the Docker network (`redpanda:9092`). No host ports are published.
+Kafka listens on the Docker network (`redpanda:9092`) and on loopback for host tools (`127.0.0.1:19092`). Compose app uses `REDPANDA_BROKERS=redpanda:9092`; local `go run` / TUI default to `localhost:19092`.
 
 ### 2. Run the API
 
@@ -36,13 +36,11 @@ For local `go run`, either run the app via Compose (recommended) or temporarily 
 go run ./cmd/sentry-lite
 ```
 
-Defaults (bare-metal):
+Defaults (bare-metal / TUI):
 
 - HTTP: `http://localhost:8080`
 - SQLite: `./data/sentry-lite.db`
-- Redpanda: `localhost:19092` (only if you publish that port for local dev)
-
-To reach internal-only Redpanda from the host for a one-off local run, add a temporary publish, e.g. `"127.0.0.1:19092:9092"` under `ports` in `docker-compose.redpanda.yml`, then set `REDPANDA_BROKERS=localhost:19092`.
+- Redpanda: `localhost:19092` (published by `docker-compose.redpanda.yml`)
 
 ### 3. UI (dev)
 
@@ -54,23 +52,47 @@ bun run dev
 
 Open `http://localhost:5173` (proxies `/api` to the Go server).
 
-### 4. Production-style (Compose)
+### 4. Production-style (pull prebuilt image)
 
-Start Redpanda first, then the app. Configure token and host port via `.env`:
+Merges to `main` publish `ghcr.io/balajimalathi/sentry-lite` (tags: `latest`, `sha-<shortsha>`). Redpanda is still a separate upstream stack — not baked into the app image.
 
 ```bash
 cp .env.example .env
 # set ADMIN_TOKEN (e.g. openssl rand -hex 32) and optional HTTP_PORT
 docker compose -f docker-compose.redpanda.yml up -d
-cd web && bun run build && cd ..
-docker compose up --build
+docker compose up -d
 ```
+
+Or with plain Docker (Redpanda stack must already be up on `sentry-lite-net`):
+
+```bash
+docker run --rm \
+  --env-file .env \
+  -e HTTP_ADDR=:8080 \
+  -e SQLITE_PATH=/data/sentry-lite.db \
+  -e DATA_DIR=/data \
+  -e WEB_DIST=/app/web/dist \
+  -e REDPANDA_BROKERS=redpanda:9092 \
+  -p 127.0.0.1:8080:8080 \
+  -v sentry-lite-data:/data \
+  --network sentry-lite-net \
+  ghcr.io/balajimalathi/sentry-lite:latest
+```
+
+`.env` only needs `ADMIN_TOKEN` (and optional `HTTP_PORT` for Compose port mapping). Compose injects brokers/paths; raw `docker run` needs the `-e` / `--network` flags above.
 
 The app listens on `127.0.0.1:${HTTP_PORT:-8080}` only. Put **host nginx** (on the VPS, not in Docker) in front for TLS and public access — see [Security](#security).
 
 UI + API via nginx (or locally `http://127.0.0.1:8080`).
 
-The app joins the external `sentry-lite-net` network created by the Redpanda stack and connects via `redpanda:9092`. Redpanda is not published to the host.
+The app joins the external `sentry-lite-net` network created by the Redpanda stack and connects via `redpanda:9092`. Host tools use `127.0.0.1:19092`.
+
+#### Build from source (contributors)
+
+```bash
+docker compose -f docker-compose.redpanda.yml up -d
+docker compose up --build
+```
 
 ## Seed DSN
 

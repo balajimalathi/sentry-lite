@@ -94,7 +94,7 @@ func DefaultConfig() Config {
 		IdleSec:   10,
 		IdleRPS:   500,
 		Mix:       defaultMix(),
-		DataDir:   "./data",
+		DataDir:   filepath.Join(root, "data"),
 		Root:      root,
 		RedpandaCompose: "docker-compose.redpanda.yml",
 	}
@@ -218,6 +218,13 @@ func (c *Config) Validate() error {
 	}
 	if err := c.ApplyDSN(c.DSN); err != nil {
 		return err
+	}
+	if c.DataDir != "" && !filepath.IsAbs(c.DataDir) {
+		base := c.Root
+		if base == "" {
+			base = findRepoRoot()
+		}
+		c.DataDir = filepath.Join(base, c.DataDir)
 	}
 	sum := 0
 	for _, w := range c.Mix {

@@ -52,6 +52,7 @@ type Model struct {
 	health     HealthSnapshot
 	wasHealthy bool
 	rate       RateTracker
+	instantRPS float64
 	baseline   RunBaselines
 }
 
@@ -123,6 +124,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tickMsg:
+		if m.screen == screenRun {
+			sent := m.runner.Counters().Sent.Load()
+			m.instantRPS = m.rate.Update(sent)
+		}
 		return m, tea.Batch(tickCmd(), healthCmd(m.cfg, false))
 
 	case resourceTickMsg:
@@ -430,7 +435,7 @@ func (m Model) viewRun() string {
 	if elapsed < 0 {
 		elapsed = 0
 	}
-	inst := m.rate.Update(sent)
+	inst := m.instantRPS
 	avg := m.rate.Avg(sent, elapsed)
 	p50, p95, p99 := c.Percentiles()
 	w := m.width - 4

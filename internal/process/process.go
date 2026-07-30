@@ -57,6 +57,14 @@ func (w *Worker) handle(ctx context.Context, value []byte) error {
 		return err
 	}
 
+	exists, err := w.Store.ProjectExists(ctx, msg.ProjectID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+
 	rawPath, err := w.writePayload(msg.ProjectID, msg.EventID, msg.Payload)
 	if err != nil {
 		return err
