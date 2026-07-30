@@ -90,23 +90,23 @@ func (b *RunBaselines) Observe(r ResourceSnapshot) {
 	}
 }
 
-func CollectResources(dataDir string) ResourceSnapshot {
+func CollectResources(dataDir, composeFile string) ResourceSnapshot {
 	s := ResourceSnapshot{At: time.Now()}
 	s.HostTotalRAM = hostTotalRAM()
 	s.HostUsedRAM = hostUsedRAM()
 	s.APIRSS, s.APICPU, s.APIPID, s.APIFound = findAPIProcess()
-	s.RedpandaMem, s.RedpandaMemPct, s.RedpandaCPU, s.RedpandaOK = redpandaStats()
+	s.RedpandaMem, s.RedpandaMemPct, s.RedpandaCPU, s.RedpandaOK = redpandaStats(composeFile)
 	s.DataBytes, s.EventsBytes, s.SQLiteBytes, s.DiskFree, s.EventFiles = collectDiskDetailed(dataDir)
 	return s
 }
 
 // CollectResourcesLight skips full directory walks (use for high-frequency polls).
-func CollectResourcesLight() ResourceSnapshot {
+func CollectResourcesLight(composeFile string) ResourceSnapshot {
 	s := ResourceSnapshot{At: time.Now()}
 	s.HostTotalRAM = hostTotalRAM()
 	s.HostUsedRAM = hostUsedRAM()
 	s.APIRSS, s.APICPU, s.APIPID, s.APIFound = findAPIProcess()
-	s.RedpandaMem, s.RedpandaMemPct, s.RedpandaCPU, s.RedpandaOK = redpandaStats()
+	s.RedpandaMem, s.RedpandaMemPct, s.RedpandaCPU, s.RedpandaOK = redpandaStats(composeFile)
 	return s
 }
 
@@ -226,26 +226,8 @@ func isAPICommand(cmd string) bool {
 		strings.Contains(cmd, "/cmd/sentry-lite")
 }
 
-func redpandaStats() (mem, memPct, cpu string, ok bool) {
-	idOut, err := exec.Command("docker", "ps", "-q", "--filter", "name=redpanda").Output()
-	if err != nil {
-		return "—", "—", "—", false
-	}
-	id := strings.TrimSpace(string(idOut))
-	if id == "" {
-		// try compose project name
-		idOut, err = exec.Command("docker", "ps", "-q", "--filter", "name=sentry-lite").Output()
-		if err != nil {
-			return "—", "—", "—", false
-		}
-		for _, line := range strings.Split(string(idOut), "\n") {
-			line = strings.TrimSpace(line)
-			if line != "" {
-				id = line
-				break
-			}
-		}
-	}
+func redpandaStats(composeFile string) (mem, memPct, cpu string, ok bool) {
+	id := resolveRedpandaContainerID(composeFile)
 	if id == "" {
 		return "—", "—", "—", false
 	}
@@ -265,6 +247,61 @@ func redpandaStats() (mem, memPct, cpu string, ok bool) {
 	}
 	memPct = parts[2]
 	return mem, memPct, cpu, true
+}
+
+func resolveRedpandaContainerID(composeFile string) string {
+	// Prefer compose-project container (same as process-manager TUI).
+	if composeFile == "" {
+		composeFile = "docker-compose.redpanda.yml"
+	}
+	cmd := exec.Command("docker", "compose", "-f", composeFile, "ps", "-q", "redpanda")
+	if root := findRepoRoot(); root != "" && root != "." {
+		cmd.Dir = root
+	}
+	if out, err := cmd.Output(); err == nil {
+		if id := firstLine(string(out)); id != "" {
+			return id
+		}
+	}
+	// Prefer sentry-lite project name over other stacks (e.g. auth-redpanda).
+	if id := firstLine(execOutput("docker", "ps", "-q", "--filter", "name=sentry-lite-redpanda")); id != "" {
+		return id
+	}
+	// Last resort: any redpanda image, take the first ID only.
+	out := execOutput("docker", "ps", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}")
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, "\t")
+		if len(parts) < 3 {
+			continue
+		}
+		name, image := strings.ToLower(parts[1]), strings.ToLower(parts[2])
+		if strings.Contains(image, "redpanda") || strings.Contains(name, "redpanda") {
+			return parts[0]
+		}
+	}
+	return ""
+}
+
+func execOutput(name string, args ...string) string {
+	out, err := exec.Command(name, args...).Output()
+	if err != nil {
+		return ""
+	}
+	return string(out)
+}
+
+func firstLine(s string) string {
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			return line
+		}
+	}
+	return ""
 }
 
 func hostTotalRAM() uint64 {

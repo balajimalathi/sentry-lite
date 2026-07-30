@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -76,9 +77,12 @@ type Config struct {
 	Headless bool
 	Yes      bool // skip large-run confirm
 	DataDir  string
+	Root     string // repo root for compose lookup
+	RedpandaCompose string
 }
 
 func DefaultConfig() Config {
+	root := findRepoRoot()
 	cfg := Config{
 		Mode:      ModeStress,
 		DSN:       envDSN(),
@@ -91,12 +95,36 @@ func DefaultConfig() Config {
 		IdleRPS:   500,
 		Mix:       defaultMix(),
 		DataDir:   "./data",
+		Root:      root,
+		RedpandaCompose: "docker-compose.redpanda.yml",
 	}
 	if err := cfg.ApplyDSN(cfg.DSN); err != nil {
 		cfg.DSN = DefaultDSN
 		_ = cfg.ApplyDSN(cfg.DSN)
 	}
 	return cfg
+}
+
+func findRepoRoot() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	dir := wd
+	for i := 0; i < 8; i++ {
+		if _, err := os.Stat(filepath.Join(dir, "docker-compose.redpanda.yml")); err == nil {
+			return dir
+		}
+		if _, err := os.Stat(filepath.Join(dir, "go.mod")); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == "" || parent == dir {
+			break
+		}
+		dir = parent
+	}
+	return wd
 }
 
 func defaultMix() [catCount]int {
@@ -170,6 +198,7 @@ func (c *Config) RegisterFlags(fs *flag.FlagSet) {
 	fs.BoolVar(&c.Headless, "headless", false, "run without TUI")
 	fs.BoolVar(&c.Yes, "yes", false, "skip confirmation for large runs")
 	fs.StringVar(&c.DataDir, "data-dir", c.DataDir, "sentry-lite data dir for disk stats")
+	fs.StringVar(&c.RedpandaCompose, "redpanda-compose", c.RedpandaCompose, "docker compose file for redpanda stats")
 }
 
 func (c *Config) Validate() error {
@@ -202,4 +231,17 @@ func (c *Config) Validate() error {
 
 func (c *Config) NeedsConfirm() bool {
 	return c.Total > 100_000 && !c.Yes
+}
+
+func (c Config) ComposePath() string {
+	if c.RedpandaCompose == "" {
+		return "docker-compose.redpanda.yml"
+	}
+	if filepath.IsAbs(c.RedpandaCompose) {
+		return c.RedpandaCompose
+	}
+	if c.Root != "" {
+		return filepath.Join(c.Root, c.RedpandaCompose)
+	}
+	return c.RedpandaCompose
 }

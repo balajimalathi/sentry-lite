@@ -76,9 +76,9 @@ func healthCmd(cfg Config, fullDisk bool) tea.Cmd {
 		ok, lat, err := client.Health(ctx)
 		var res ResourceSnapshot
 		if fullDisk {
-			res = CollectResources(cfg.DataDir)
+			res = CollectResources(cfg.DataDir, cfg.ComposePath())
 		} else {
-			res = CollectResourcesLight()
+			res = CollectResourcesLight(cfg.ComposePath())
 		}
 		h := HealthSnapshot{
 			At:          time.Now(),
@@ -566,7 +566,7 @@ func RunHeadless(cfg Config) error {
 	}
 
 	var base RunBaselines
-	base.Observe(CollectResources(cfg.DataDir))
+	base.Observe(CollectResources(cfg.DataDir, cfg.ComposePath()))
 
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -577,11 +577,16 @@ func RunHeadless(cfg Config) error {
 			return nil
 		case <-ticker.C:
 			c := r.Counters()
-			res := CollectResources(cfg.DataDir)
+			res := CollectResources(cfg.DataDir, cfg.ComposePath())
 			base.Observe(res)
-			fmt.Printf("\r sent=%d ok=%d 5xx=%d | api=%s (peak %s Δ%s) | data=%s (Δ%s) files=%d free=%s     ",
+			rp := "—"
+			if res.RedpandaOK {
+				rp = res.RedpandaMem
+			}
+			fmt.Printf("\r sent=%d ok=%d 5xx=%d | api=%s (peak %s Δ%s) | rp=%s | data=%s (Δ%s) files=%d free=%s     ",
 				c.Sent.Load(), c.OK.Load(), c.Err5xx.Load(),
 				fmtBytes(res.APIRSS), fmtBytes(base.PeakAPIRSS), fmtDelta(res.APIRSS, base.APIRSS),
+				rp,
 				fmtBytes(res.DataBytes), fmtDelta(res.DataBytes, base.DataBytes),
 				res.EventFiles, fmtBytes(res.DiskFree))
 			if r.State() == StateDone {
@@ -595,7 +600,7 @@ func RunHeadless(cfg Config) error {
 func printHeadlessSummary(cfg Config, r *Runner, base RunBaselines) {
 	c := r.Counters()
 	p50, p95, p99 := c.Percentiles()
-	res := CollectResources(cfg.DataDir)
+	res := CollectResources(cfg.DataDir, cfg.ComposePath())
 	base.Observe(res)
 	elapsed := time.Since(r.StartedAt())
 	fmt.Printf("\n\n=== load summary ===\n")
