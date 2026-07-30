@@ -1,60 +1,80 @@
 # sentry-lite
 
-Lean, self-hostable error monitoring with Sentry-compatible ingest. V2 adds performance tracing and cron/heartbeat monitoring.
+[![Status](https://img.shields.io/badge/status-alpha-orange)](https://github.com/balajimalathi/sentry-lite)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![Go](https://img.shields.io/badge/go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 
-## Stack
+**Lean, self-hostable error monitoring** with Sentry-compatible ingest. Drop-in for official Sentry SDKs — point the DSN at your instance.
 
-- Go API + processor (single binary)
-- SQLite metadata store
-- Redpanda (Kafka-compatible) ingest bus — separate Compose file
-- React (Vite) triage UI, built with Bun
+> **Alpha** — APIs, storage schema, and UI may change without a stable upgrade path. Suitable for evaluation and early self-hosting, not production-critical workloads yet. See [Security](#security) before exposing anything to the internet.
 
-## Quick start (local)
+## Features
 
-Copy env for local API auth (gateway token login):
+- **Sentry-compatible ingest** — envelopes + legacy store; use `@sentry/*` SDKs as-is
+- **Issue triage UI** — filter by environment, release, tags; resolve / ignore / assign
+- **Performance** — transactions, spans, p95/p99, trace detail
+- **Crons** — heartbeat monitors with missed-check alerts
+- **Releases** — register versions and track issue/event health
+- **Alerts** — Slack, email, webhook, Telegram
+- **Single Go binary** + SQLite + Redpanda (Kafka-compatible) bus
+- **Docker image** on GHCR: `ghcr.io/balajimalathi/sentry-lite`
+
+## Architecture
+
+| Piece | Role |
+|-------|------|
+| Go API + processor | Ingest, processing, management API (one binary) |
+| SQLite | Metadata / issues / projects |
+| Redpanda | Kafka-compatible ingest bus (separate Compose stack) |
+| React (Vite) UI | Triage dashboard (Bun to build / develop) |
+
+```
+SDK ──DSN──▶ Go API ──▶ Redpanda ──▶ processor ──▶ SQLite
+                │
+                └── serves UI (+ /api/internal/*)
+```
+
+## Quick start
+
+### Prerequisites
+
+- [Go](https://go.dev/) 1.25+
+- [Bun](https://bun.sh)
+- [Docker](https://docs.docker.com/get-docker/) (Redpanda)
+
+### Local (recommended)
 
 ```bash
 cp .env.example .env
-# edit ADMIN_TOKEN if you want; defaults work for local
+# edit ADMIN_TOKEN for gateway login; defaults work locally
+
+docker compose -f docker-compose.redpanda.yml up -d
+go run ./cmd/sentry-lite-tui
 ```
 
-`go run` / the TUI load `.env` automatically (existing shell env wins).
+The TUI starts Redpanda (if needed), the Go API, and the Vite UI with live logs.
 
-### 1. Start Redpanda (separate stack)
+Or start pieces yourself:
 
 ```bash
 docker compose -f docker-compose.redpanda.yml up -d
-```
-
-Kafka listens on the Docker network (`redpanda:9092`) and on loopback for host tools (`127.0.0.1:19092`). Compose app uses `REDPANDA_BROKERS=redpanda:9092`; local `go run` / TUI default to `localhost:19092`.
-
-### 2. Run the API
-
-For local `go run`, either run the app via Compose (recommended) or temporarily publish a loopback Kafka port on Redpanda. With Compose, the app uses `REDPANDA_BROKERS=redpanda:9092`.
-
-```bash
-go run ./cmd/sentry-lite
+go run ./cmd/sentry-lite          # http://localhost:8080
+cd web && bun install && bun run dev   # http://localhost:5173
 ```
 
 Defaults (bare-metal / TUI):
 
-- HTTP: `http://localhost:8080`
-- SQLite: `./data/sentry-lite.db`
-- Redpanda: `localhost:19092` (published by `docker-compose.redpanda.yml`)
+| | |
+|--|--|
+| HTTP | `http://localhost:8080` |
+| SQLite | `./data/sentry-lite.db` |
+| Redpanda | `localhost:19092` (Compose app uses `redpanda:9092`) |
 
-### 3. UI (dev)
+`go run` / the TUI load `.env` automatically (existing shell env wins).
 
-```bash
-cd web
-bun install
-bun run dev
-```
+### Docker (prebuilt image)
 
-Open `http://localhost:5173` (proxies `/api` to the Go server).
-
-### 4. Production-style (pull prebuilt image)
-
-Merges to `main` publish `ghcr.io/balajimalathi/sentry-lite` (tags: `latest`, `sha-<shortsha>`). Redpanda is still a separate upstream stack — not baked into the app image.
+Merges to `main` publish `ghcr.io/balajimalathi/sentry-lite` (`latest`, `sha-<shortsha>`). Redpanda stays a separate stack.
 
 ```bash
 cp .env.example .env
@@ -63,7 +83,7 @@ docker compose -f docker-compose.redpanda.yml up -d
 docker compose up -d
 ```
 
-Or with plain Docker (Redpanda stack must already be up on `sentry-lite-net`):
+Or plain Docker (Redpanda must already be up on `sentry-lite-net`):
 
 ```bash
 docker run --rm \
@@ -79,20 +99,14 @@ docker run --rm \
   ghcr.io/balajimalathi/sentry-lite:latest
 ```
 
-`.env` only needs `ADMIN_TOKEN` (and optional `HTTP_PORT` for Compose port mapping). Compose injects brokers/paths; raw `docker run` needs the `-e` / `--network` flags above.
-
-The app listens on `127.0.0.1:${HTTP_PORT:-8080}` only. Put **host nginx** (on the VPS, not in Docker) in front for TLS and public access — see [Security](#security).
-
-UI + API via nginx (or locally `http://127.0.0.1:8080`).
-
-The app joins the external `sentry-lite-net` network created by the Redpanda stack and connects via `redpanda:9092`. Host tools use `127.0.0.1:19092`.
-
-#### Build from source (contributors)
+Build from source:
 
 ```bash
 docker compose -f docker-compose.redpanda.yml up -d
 docker compose up --build
 ```
+
+The app listens on `127.0.0.1:${HTTP_PORT:-8080}` only. Put **host nginx** (or Caddy) in front for TLS — see [Security](#security).
 
 ## Seed DSN
 
@@ -102,20 +116,18 @@ On first boot a demo project is created:
 http://a1b2c3d4e5f6789012345678abcdef01@localhost:8080/1
 ```
 
-Point any official Sentry SDK at this DSN (only change the host/path).
+Point any official Sentry SDK at this DSN (change host/path only). Create more projects in the UI (Projects → New project).
 
-You can also create projects in the UI (Projects → New project). Copy the returned DSN into your SDK.
+### SDK configuration
 
-### Environment, release, and tags
-
-These are **not** set in the triage UI — they arrive on each event from the SDK:
+Environment, release, and tags are **not** set in the triage UI — they arrive on each event from the SDK:
 
 ```ts
 Sentry.init({
   dsn: '...',
   environment: 'production',
   release: 'my-app@1.2.3',
-  tracesSampleRate: 1.0, // enable performance transactions
+  tracesSampleRate: 1.0,
 })
 
 Sentry.captureException(err, {
@@ -124,75 +136,37 @@ Sentry.captureException(err, {
 })
 ```
 
-Issue filters (environment / release / tag dropdowns) read distinct values already stored from ingested events.
-
 ### Telegram alerts
 
-Channel `telegram` stores `botToken|chatId`. Message your bot once (so you know the chat id), then create the rule — sentry-lite sends a “connected” sample message and fails create if Telegram rejects it.
+Channel `telegram` stores `botToken|chatId`. Message your bot once (to learn the chat id), then create the rule — sentry-lite sends a sample message and fails create if Telegram rejects it.
 
-## Smoke test (Node SDK + Bun)
+## Examples & tools
 
-Errors:
-
-```bash
-cd examples/node-sdk
-bun install
-bun run send.ts
-```
-
-Performance transactions:
+| Path | Purpose |
+|------|---------|
+| [`examples/node-sdk`](examples/node-sdk) | Bun smoke test (errors + performance) |
+| [`examples/nextjs`](examples/nextjs) | Next.js playground (`@sentry/nextjs`) |
+| [`docs/load-test.md`](docs/load-test.md) | Headless 1M-event load test |
+| `go run ./cmd/sentry-lite-load` | Interactive load-test TUI |
+| `go run ./cmd/sentry-lite-release` | Register a release from CLI |
 
 ```bash
+# errors
+cd examples/node-sdk && bun install && bun run send.ts
+
+# performance
 bun run send-perf.ts
-```
 
-Then open Issues / Performance in the UI.
-
-### Next.js sample (Bun + shadcn)
-
-```bash
-cd examples/nextjs
-bun install
-bun run dev
-```
-
-Points `@sentry/nextjs` at project 3 — full feature playground (errors, mock APIs / performance, releases, crons, alerts). See [`examples/nextjs/README.md`](examples/nextjs/README.md).
-
-### Load test TUI
-
-Stress/peak ingest against the API (errors, transactions, crons, releases — same mix as the playground):
-
-```bash
-go run ./cmd/sentry-lite-load
-```
-
-Headless 1M-event run: see [`docs/load-test.md`](docs/load-test.md).
-
-### Cron check-in
-
-Create a monitor in the Crons UI, then:
-
-```bash
+# cron check-in (create monitor in UI first)
 curl -X POST http://localhost:8080/api/cron/check-in/<token>
 ```
 
-## Dev TUI (start everything)
-
-One command starts Redpanda (Docker), the Go API, and the Vite web app, with live logs:
+Release CLI:
 
 ```bash
-go run ./cmd/sentry-lite-tui
+go run ./cmd/sentry-lite-release -version=1.2.3 [-project=1] [-token="$ADMIN_TOKEN"]
+# or SENTRY_LITE_TOKEN
 ```
-
-On launch it runs:
-
-1. `docker compose -f docker-compose.redpanda.yml up -d` (+ log tail)
-2. `bun run dev` in `web/`
-3. `go run ./cmd/sentry-lite`
-
-Left sidebar panels: redpanda · api · web · stats (live RAM/CPU/disk cards).
-
-Keys: `↑`/`↓` select service · `j`/`k` scroll · `1–4` / `tab` shortcuts · `a` restart all · `s` restart · `x` stop · `r` refresh stats · `q` quit (stops API + web; leaves Redpanda running). Mouse wheel scrolls the log/stats pane.
 
 ## API surface
 
@@ -203,41 +177,49 @@ Keys: `↑`/`↓` select service · `j`/`k` scroll · `1–4` / `tab` shortcuts 
 | `POST /api/cron/check-in/{token}` | Cron heartbeat check-in |
 | `GET /api/internal/projects` | Project list |
 | `POST /api/internal/projects` | Create project `{ name, slug? }` → project + DSN |
-| `GET /api/internal/facets` | Distinct env/release/tag values (`project_id` optional) |
-| `GET /api/internal/issues` | Issue list (`project_id`, `environment`, `release`, `q`, `tag`/`tag_key`+`tag_value`, `from`, `to`) |
+| `GET /api/internal/facets` | Distinct env/release/tag values |
+| `GET /api/internal/issues` | Issue list (filters: `project_id`, `environment`, `release`, `q`, tags, `from`/`to`) |
 | `GET /api/internal/issues/{id}` | Issue + latest event |
 | `PATCH /api/internal/issues/{id}` | `{ "status": "open\|resolved\|ignored", "assignee": "..." }` |
 | `GET /api/internal/transactions?project_id=` | Transaction list with p95/p99 (24h) |
-| `GET /api/internal/transaction?project_id=&name=` | Transaction samples + spans |
+| `GET /api/internal/transaction?project_id=&name=` | Samples + spans |
 | `GET /api/internal/traces/{trace_id}` | Trace detail + related error issues |
 | `GET /api/internal/crons?project_id=` | Cron monitors |
-| `POST /api/internal/crons` | Create monitor `{ project_id, name, schedule_sec, grace_sec? }` |
-| `PATCH /api/internal/crons/{id}` | Update monitor |
-| `DELETE /api/internal/crons/{id}` | Delete monitor |
-| `GET /api/internal/releases?project_id=` | Release health (issue/event counts) |
-| `POST /api/internal/releases` | Register release `{ project_id, version, ref?, url? }` |
-| `GET /api/internal/alerts?project_id=` | Alert rules |
-| `POST /api/internal/alerts` | Create rule (`slack` / `email` / `webhook` / `telegram`; triggers include `cron_missed`) |
+| `POST /api/internal/crons` | Create monitor |
+| `PATCH` / `DELETE /api/internal/crons/{id}` | Update / delete monitor |
+| `GET` / `POST /api/internal/releases` | List / register releases |
+| `GET` / `POST /api/internal/alerts` | Alert rules (`slack` / `email` / `webhook` / `telegram`) |
 | `GET /healthz` | Health check |
 
-Release CLI:
+## Configuration
 
-```bash
-go run ./cmd/sentry-lite-release -version=1.2.3 [-project=1] [-token="$ADMIN_TOKEN"]
-```
+| Var | Default |
+|-----|---------|
+| `HTTP_ADDR` | `:8080` |
+| `SQLITE_PATH` | `./data/sentry-lite.db` |
+| `DATA_DIR` | `./data` |
+| `REDPANDA_BROKERS` | `localhost:19092` (Compose: `redpanda:9092`) |
+| `INGEST_TOPIC` | `events.ingest` |
+| `WEB_DIST` | `./web/dist` |
+| `PUBLIC_URL` | `http://localhost:8080` (issue links in alerts) |
+| `ADMIN_TOKEN` | _(empty = management API open; set for any real deploy)_ |
+| `HTTP_PORT` | `8080` (Compose host bind only) |
+| `SENTRY_LITE_TOKEN` | _(release CLI; same as `ADMIN_TOKEN`)_ |
+| `ALERT_SMTP` | _(empty = email alerts off)_ |
+| `ALERT_FROM` | `sentry-lite@localhost` |
 
-Or set `SENTRY_LITE_TOKEN`.
+Browser SDK CORS is per project (`allowed_origins`). Empty list = any Origin. The seeded demo project allows `http://localhost:5173`, `:3000`, and `:8080`.
 
 ## Security
 
-Management UI and `/api/internal/*` are protected by a shared `ADMIN_TOKEN` (gateway token) when that env var is set. Ingest (`DSN` public key) and cron check-ins (URL token) stay separate.
+Management UI and `/api/internal/*` are protected by `ADMIN_TOKEN` when set. Ingest (DSN public key) and cron check-ins (URL token) stay separate.
 
-- **Local / TUI:** put `ADMIN_TOKEN` in `.env` (see `.env.example`) so the Vite UI at `:5173` shows the gateway-token login. Leave it unset only if you want an open management API (process logs a warning).
-- **Any non-local deploy:** set a long random `ADMIN_TOKEN` in `.env`. Sign in to the UI with that token (stored in browser `sessionStorage`; expires after 1 hour of inactivity). Share the same token so others can sign in from their browsers.
+- **Local / TUI:** put `ADMIN_TOKEN` in `.env` so the Vite UI shows gateway-token login.
+- **Any non-local deploy:** use a long random `ADMIN_TOKEN`. UI stores it in `sessionStorage` (1h idle expiry).
 
-### Host nginx (VPS — not in Docker)
+### Host reverse proxy (VPS — not in Docker)
 
-Bind the container to localhost (`127.0.0.1:8080` in Compose). Terminate TLS and proxy on the VPS with nginx (or Caddy). Example:
+Bind the container to localhost; terminate TLS on the host:
 
 ```nginx
 server {
@@ -260,33 +242,24 @@ server {
 }
 ```
 
-SDKs use the public hostname in the DSN; nginx forwards envelopes to the app, which still validates the project public key. Do not put nginx inside the Compose stack for this setup.
-
-## Env vars
-
-| Var | Default |
-|-----|---------|
-| `HTTP_ADDR` | `:8080` |
-| `SQLITE_PATH` | `./data/sentry-lite.db` |
-| `DATA_DIR` | `./data` |
-| `REDPANDA_BROKERS` | `localhost:19092` (Compose app uses `redpanda:9092`) |
-| `INGEST_TOPIC` | `events.ingest` |
-| `WEB_DIST` | `./web/dist` |
-| `PUBLIC_URL` | `http://localhost:8080` (issue links in alerts) |
-| `ADMIN_TOKEN` | _(empty = management API open; required by Compose / `.env`)_ |
-| `HTTP_PORT` | `8080` (Compose host bind only; see `.env.example`) |
-| `SENTRY_LITE_TOKEN` | _(release CLI; same value as `ADMIN_TOKEN`)_ |
-| `ALERT_SMTP` | _(empty = email alerts disabled)_ |
-| `ALERT_FROM` | `sentry-lite@localhost` |
-
-Browser SDK CORS is configured per project (`allowed_origins` on create). An empty list allows any Origin. The seeded demo project allows `http://localhost:5173`, `http://localhost:3000`, and `http://localhost:8080`.
+To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Troubleshooting
 
-If ingest returns 200 but issues never appear after hard-killing the app, the Kafka consumer group may be stuck mid-rebalance:
+If ingest returns 200 but issues never appear after a hard kill, the Kafka consumer group may be stuck mid-rebalance:
 
 ```bash
 docker compose -f docker-compose.redpanda.yml exec redpanda rpk group delete sentry-lite-processor
 ```
 
 Then restart the app.
+
+## Contributing
+
+Contributions are welcome — please read [CONTRIBUTING.md](CONTRIBUTING.md) and the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## License
+
+Copyright 2026 Balaji Malathi.
+
+Licensed under the [Apache License, Version 2.0](LICENSE). See [NOTICE](NOTICE).
