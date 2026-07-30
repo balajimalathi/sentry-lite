@@ -1,0 +1,533 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"embed"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+//go:embed migrations/*.sql
+var migrationFS embed.FS
+
+type Store struct {
+	DB *sql.DB
+}
+
+type ProjectKey struct {
+	ProjectID int64
+	PublicKey string
+	SecretKey string
+}
+
+type Project struct {
+	ID               int64   `json:"id"`
+	Slug             string  `json:"slug"`
+	Name             string  `json:"name"`
+	IssueCount       int64   `json:"issue_count"`
+	LatestActivityAt *string `json:"latest_activity_at"`
+	CreatedAt        string  `json:"created_at"`
+}
+
+type Issue struct {
+	ID           int64    `json:"id"`
+	ProjectID    int64    `json:"project_id"`
+	Fingerprint  string   `json:"fingerprint"`
+	Title        string   `json:"title"`
+	Culprit      string   `json:"culprit"`
+	Status       string   `json:"status"`
+	Level        string   `json:"level"`
+	Count        int64    `json:"count"`
+	FirstSeen    string   `json:"first_seen"`
+	LastSeen     string   `json:"last_seen"`
+	FirstRelease *string  `json:"first_release"`
+	LastRelease  *string  `json:"last_release"`
+	Regressed    bool     `json:"regressed"`
+	Environments []string `json:"environments,omitempty"`
+}
+
+type Event struct {
+	ID            int64             `json:"id"`
+	EventID       string            `json:"event_id"`
+	IssueID       int64             `json:"issue_id"`
+	ProjectID     int64             `json:"project_id"`
+	Timestamp     string            `json:"timestamp"`
+	Environment   *string           `json:"environment"`
+	Release       *string           `json:"release"`
+	Platform      *string           `json:"platform"`
+	Message       *string           `json:"message"`
+	ExceptionType *string           `json:"exception_type"`
+	Culprit       *string           `json:"culprit"`
+	UserID        *string           `json:"user_id"`
+	UserEmail     *string           `json:"user_email"`
+	RawPath       string            `json:"raw_path"`
+	PayloadJSON   string            `json:"payload_json,omitempty"`
+	Tags          map[string]string `json:"tags,omitempty"`
+}
+
+type IssueListFilter struct {
+	ProjectID   int64
+	Environment string
+	Release     string
+	Query       string
+	Limit       int
+}
+
+func Open(path string) (*Store, error) {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return nil, err
+	}
+	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)", path)
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	s := &Store{DB: db}
+	if err := s.migrate(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	if err := s.seed(); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) Close() error {
+	return s.DB.Close()
+}
+
+func (s *Store) migrate() error {
+	entries, err := migrationFS.ReadDir("migrations")
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
+			continue
+		}
+		b, err := migrationFS.ReadFile("migrations/" + e.Name())
+		if err != nil {
+			return err
+		}
+		if _, err := s.DB.Exec(string(b)); err != nil {
+			return fmt.Errorf("migrate %s: %w", e.Name(), err)
+		}
+	}
+	return nil
+}
+
+const (
+	SeedPublicKey = "a1b2c3d4e5f6789012345678abcdef01"
+	SeedSecretKey = "deadbeefdeadbeefdeadbeefdeadbeef"
+)
+
+func (s *Store) seed() error {
+	var n int
+	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM organizations`).Scan(&n); err != nil {
+		return err
+	}
+	if n > 0 {
+		return nil
+	}
+	tx, err := s.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+
+	res, err := tx.Exec(`INSERT INTO organizations (slug, name) VALUES (?, ?)`, "default", "Default")
+	if err != nil {
+		return err
+	}
+	orgID, _ := res.LastInsertId()
+	res, err = tx.Exec(`INSERT INTO projects (organization_id, slug, name) VALUES (?, ?, ?)`, orgID, "demo", "Demo Project")
+	if err != nil {
+		return err
+	}
+	projectID, _ := res.LastInsertId()
+	_, err = tx.Exec(
+		`INSERT INTO project_keys (project_id, public_key, secret_key) VALUES (?, ?, ?)`,
+		projectID, SeedPublicKey, SeedSecretKey,
+	)
+	if err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) LookupProjectKey(ctx context.Context, publicKey string, projectID int64) (*ProjectKey, error) {
+	var pk ProjectKey
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT project_id, public_key, secret_key FROM project_keys WHERE public_key = ? AND project_id = ?`,
+		publicKey, projectID,
+	).Scan(&pk.ProjectID, &pk.PublicKey, &pk.SecretKey)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &pk, nil
+}
+
+func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT p.id, p.slug, p.name, p.created_at,
+		       COALESCE((SELECT COUNT(*) FROM issues i WHERE i.project_id = p.id), 0) AS issue_count,
+		       (SELECT MAX(i.last_seen) FROM issues i WHERE i.project_id = p.id) AS latest_activity
+		FROM projects p
+		ORDER BY p.id ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Project
+	for rows.Next() {
+		var p Project
+		var latest sql.NullString
+		if err := rows.Scan(&p.ID, &p.Slug, &p.Name, &p.CreatedAt, &p.IssueCount, &latest); err != nil {
+			return nil, err
+		}
+		if latest.Valid {
+			p.LatestActivityAt = &latest.String
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) ListIssues(ctx context.Context, f IssueListFilter) ([]Issue, error) {
+	if f.Limit <= 0 {
+		f.Limit = 100
+	}
+	conds := []string{"1=1"}
+	args := []any{}
+	if f.ProjectID > 0 {
+		conds = append(conds, "i.project_id = ?")
+		args = append(args, f.ProjectID)
+	}
+	if f.Environment != "" {
+		conds = append(conds, `EXISTS (SELECT 1 FROM event_tags et WHERE et.issue_id = i.id AND et.key = 'environment' AND et.value = ?)`)
+		args = append(args, f.Environment)
+	}
+	if f.Release != "" {
+		conds = append(conds, `EXISTS (SELECT 1 FROM event_tags et WHERE et.issue_id = i.id AND et.key = 'release' AND et.value = ?)`)
+		args = append(args, f.Release)
+	}
+	if f.Query != "" {
+		conds = append(conds, "(i.title LIKE ? OR i.culprit LIKE ?)")
+		q := "%" + f.Query + "%"
+		args = append(args, q, q)
+	}
+	args = append(args, f.Limit)
+	query := `SELECT i.id, i.project_id, i.fingerprint, i.title, i.culprit, i.status, i.level,
+		i.count, i.first_seen, i.last_seen, i.first_release, i.last_release, i.regressed
+		FROM issues i WHERE ` + strings.Join(conds, " AND ") + ` ORDER BY i.last_seen DESC LIMIT ?`
+
+	rows, err := s.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Issue
+	for rows.Next() {
+		iss, err := scanIssue(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, *iss)
+	}
+	return out, rows.Err()
+}
+
+type scannable interface {
+	Scan(dest ...any) error
+}
+
+func scanIssue(row scannable) (*Issue, error) {
+	var iss Issue
+	var firstRel, lastRel sql.NullString
+	var regressed int
+	if err := row.Scan(
+		&iss.ID, &iss.ProjectID, &iss.Fingerprint, &iss.Title, &iss.Culprit, &iss.Status, &iss.Level,
+		&iss.Count, &iss.FirstSeen, &iss.LastSeen, &firstRel, &lastRel, &regressed,
+	); err != nil {
+		return nil, err
+	}
+	if firstRel.Valid {
+		iss.FirstRelease = &firstRel.String
+	}
+	if lastRel.Valid {
+		iss.LastRelease = &lastRel.String
+	}
+	iss.Regressed = regressed == 1
+	return &iss, nil
+}
+
+func (s *Store) GetIssue(ctx context.Context, id int64) (*Issue, error) {
+	row := s.DB.QueryRowContext(ctx, `
+		SELECT id, project_id, fingerprint, title, culprit, status, level, count,
+		       first_seen, last_seen, first_release, last_release, regressed
+		FROM issues WHERE id = ?
+	`, id)
+	iss, err := scanIssue(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT DISTINCT value FROM event_tags WHERE issue_id = ? AND key = 'environment' ORDER BY value
+	`, id)
+	if err != nil {
+		return iss, nil
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return nil, err
+		}
+		iss.Environments = append(iss.Environments, v)
+	}
+	return iss, nil
+}
+
+func (s *Store) UpdateIssueStatus(ctx context.Context, id int64, status string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE issues SET status = ?, regressed = 0 WHERE id = ?`, status, id)
+	return err
+}
+
+func (s *Store) ListEventsForIssue(ctx context.Context, issueID int64, limit int) ([]Event, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT id, event_id, issue_id, project_id, timestamp, environment, release, platform,
+		       message, exception_type, culprit, user_id, user_email, raw_path, payload_json
+		FROM events WHERE issue_id = ? ORDER BY timestamp DESC LIMIT ?
+	`, issueID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return scanEvents(rows)
+}
+
+func (s *Store) GetLatestEvent(ctx context.Context, issueID int64) (*Event, error) {
+	events, err := s.ListEventsForIssue(ctx, issueID, 1)
+	if err != nil {
+		return nil, err
+	}
+	if len(events) == 0 {
+		return nil, nil
+	}
+	ev := events[0]
+	tags, err := s.GetEventTags(ctx, ev.EventID)
+	if err != nil {
+		return &ev, nil
+	}
+	ev.Tags = tags
+	return &ev, nil
+}
+
+func (s *Store) GetEventTags(ctx context.Context, eventID string) (map[string]string, error) {
+	rows, err := s.DB.QueryContext(ctx, `SELECT key, value FROM event_tags WHERE event_id = ?`, eventID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var k, v string
+		if err := rows.Scan(&k, &v); err != nil {
+			return nil, err
+		}
+		out[k] = v
+	}
+	return out, rows.Err()
+}
+
+func scanEvents(rows *sql.Rows) ([]Event, error) {
+	var out []Event
+	for rows.Next() {
+		var e Event
+		var env, rel, plat, msg, exType, culprit, uid, uemail sql.NullString
+		if err := rows.Scan(
+			&e.ID, &e.EventID, &e.IssueID, &e.ProjectID, &e.Timestamp,
+			&env, &rel, &plat, &msg, &exType, &culprit, &uid, &uemail, &e.RawPath, &e.PayloadJSON,
+		); err != nil {
+			return nil, err
+		}
+		e.Environment = nullStr(env)
+		e.Release = nullStr(rel)
+		e.Platform = nullStr(plat)
+		e.Message = nullStr(msg)
+		e.ExceptionType = nullStr(exType)
+		e.Culprit = nullStr(culprit)
+		e.UserID = nullStr(uid)
+		e.UserEmail = nullStr(uemail)
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
+func nullStr(ns sql.NullString) *string {
+	if ns.Valid {
+		return &ns.String
+	}
+	return nil
+}
+
+type UpsertEventInput struct {
+	EventID       string
+	ProjectID     int64
+	Fingerprint   string
+	Title         string
+	Culprit       string
+	Level         string
+	Timestamp     time.Time
+	Environment   string
+	Release       string
+	Platform      string
+	Message       string
+	ExceptionType string
+	UserID        string
+	UserEmail     string
+	RawPath       string
+	PayloadJSON   string
+	Tags          map[string]string
+}
+
+type UpsertResult struct {
+	IssueID   int64
+	IsNew     bool
+	Regressed bool
+}
+
+func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertResult, error) {
+	tx, err := s.DB.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	ts := in.Timestamp.UTC().Format(time.RFC3339Nano)
+
+	var issueID int64
+	var status string
+	var firstRelease, lastRelease sql.NullString
+	err = tx.QueryRowContext(ctx,
+		`SELECT id, status, first_release, last_release FROM issues WHERE project_id = ? AND fingerprint = ?`,
+		in.ProjectID, in.Fingerprint,
+	).Scan(&issueID, &status, &firstRelease, &lastRelease)
+
+	result := &UpsertResult{}
+	if err == sql.ErrNoRows {
+		res, err := tx.ExecContext(ctx, `
+			INSERT INTO issues (project_id, fingerprint, title, culprit, status, level, count, first_seen, last_seen, first_release, last_release, regressed)
+			VALUES (?, ?, ?, ?, 'open', ?, 1, ?, ?, ?, ?, 0)
+		`, in.ProjectID, in.Fingerprint, in.Title, in.Culprit, in.Level, ts, ts, nullOrNil(in.Release), nullOrNil(in.Release))
+		if err != nil {
+			return nil, err
+		}
+		issueID, _ = res.LastInsertId()
+		result.IsNew = true
+		result.IssueID = issueID
+	} else if err != nil {
+		return nil, err
+	} else {
+		result.IssueID = issueID
+		regressed := 0
+		newStatus := status
+		if status == "resolved" {
+			newStatus = "open"
+			regressed = 1
+			result.Regressed = true
+		}
+		firstRel := firstRelease
+		lastRel := lastRelease
+		if in.Release != "" {
+			if !firstRel.Valid {
+				firstRel = sql.NullString{String: in.Release, Valid: true}
+			}
+			lastRel = sql.NullString{String: in.Release, Valid: true}
+		}
+		_, err = tx.ExecContext(ctx, `
+			UPDATE issues SET count = count + 1, last_seen = ?, status = ?, regressed = ?,
+			       title = ?, culprit = ?, first_release = ?, last_release = ?
+			WHERE id = ?
+		`, ts, newStatus, regressed, in.Title, in.Culprit, nullStrVal(firstRel), nullStrVal(lastRel), issueID)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	_, err = tx.ExecContext(ctx, `
+		INSERT OR IGNORE INTO events (
+			event_id, issue_id, project_id, timestamp, environment, release, platform,
+			message, exception_type, culprit, user_id, user_email, raw_path, payload_json
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, in.EventID, issueID, in.ProjectID, ts, nullOrNil(in.Environment), nullOrNil(in.Release), nullOrNil(in.Platform),
+		nullOrNil(in.Message), nullOrNil(in.ExceptionType), nullOrNil(in.Culprit),
+		nullOrNil(in.UserID), nullOrNil(in.UserEmail), in.RawPath, in.PayloadJSON)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := map[string]bool{}
+	addTag := func(k, v string) error {
+		if k == "" || v == "" || seen[k] {
+			return nil
+		}
+		seen[k] = true
+		_, err := tx.ExecContext(ctx,
+			`INSERT INTO event_tags (event_id, issue_id, project_id, key, value) VALUES (?, ?, ?, ?, ?)`,
+			in.EventID, issueID, in.ProjectID, k, v,
+		)
+		return err
+	}
+	for k, v := range in.Tags {
+		if err := addTag(k, v); err != nil {
+			return nil, err
+		}
+	}
+	if err := addTag("environment", in.Environment); err != nil {
+		return nil, err
+	}
+	if err := addTag("release", in.Release); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func nullOrNil(s string) any {
+	if s == "" {
+		return nil
+	}
+	return s
+}
+
+func nullStrVal(ns sql.NullString) any {
+	if ns.Valid {
+		return ns.String
+	}
+	return nil
+}

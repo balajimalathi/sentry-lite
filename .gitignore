@@ -1,0 +1,7 @@
+data/
+web/dist/
+web/node_modules/
+*.db
+.DS_Store
+.env
+examples/node-sdk/node_modules/
