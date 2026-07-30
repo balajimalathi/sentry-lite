@@ -235,7 +235,7 @@ export default function IssuesPage() {
             return <span className="text-muted-foreground">—</span>
           }
           return (
-            <div className="flex max-w-[10rem] flex-wrap gap-1">
+            <div className="flex max-w-40 flex-wrap gap-1">
               {envs.map((env) => (
                 <Badge key={env} variant="outline" className="font-normal">
                   {env}
@@ -297,7 +297,7 @@ export default function IssuesPage() {
                 <Badge
                   key={tag}
                   variant="outline"
-                  className="max-w-[8rem] truncate font-mono text-xs font-normal"
+                  className="max-w-32 truncate font-mono text-xs font-normal"
                 >
                   {tag}
                 </Badge>
