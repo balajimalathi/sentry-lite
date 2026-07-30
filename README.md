@@ -8,7 +8,13 @@
 
 > **Alpha** — APIs, storage schema, and UI may change without a stable upgrade path. Suitable for evaluation and early self-hosting, not production-critical workloads yet. See [Security](#security) before exposing anything to the internet.
 
+## Demo
 
+[Demo walkthrough](assets/demo.mov) · [Load-test benchmark](assets/benchmark.mov)
+
+TUI resource stats while the API, web UI, and Redpanda are running:
+
+![sentry-lite TUI stats](assets/stats.png)
 
 ## Features
 
