@@ -3,11 +3,13 @@ package store
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
+
+	"gorm.io/gorm"
 )
 
 type CronMonitor struct {
@@ -92,67 +94,65 @@ func (s *Store) CreateCronMonitor(ctx context.Context, in CreateCronInput) (*Cro
 	}
 	now := time.Now().UTC()
 	next := now.Add(time.Duration(in.ScheduleSec) * time.Second).Format(time.RFC3339Nano)
-	res, err := s.DB.ExecContext(ctx, `
-		INSERT INTO cron_monitors (
-			project_id, slug, name, schedule_sec, grace_sec, environment,
-			status, next_expected_at, token
-		) VALUES (?, ?, ?, ?, ?, ?, 'unknown', ?, ?)
-	`, in.ProjectID, slug, in.Name, in.ScheduleSec, in.GraceSec, nullOrNil(in.Environment), next, token)
-	if err != nil {
+	row := CronMonitorRow{
+		ProjectID:      in.ProjectID,
+		Slug:           slug,
+		Name:           in.Name,
+		ScheduleSec:    in.ScheduleSec,
+		GraceSec:       in.GraceSec,
+		Environment:    strPtrOrNil(in.Environment),
+		Status:         "unknown",
+		NextExpectedAt: &next,
+		Token:          token,
+	}
+	if err := s.DB.WithContext(ctx).Create(&row).Error; err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
-	return s.GetCronMonitor(ctx, id)
+	return s.GetCronMonitor(ctx, row.ID)
 }
 
 func (s *Store) GetCronMonitor(ctx context.Context, id int64) (*CronMonitor, error) {
-	row := s.DB.QueryRowContext(ctx, `
-		SELECT id, project_id, slug, name, schedule_sec, grace_sec, environment, status,
-		       last_checkin_at, next_expected_at, token, created_at
-		FROM cron_monitors WHERE id = ?
-	`, id)
-	return scanCronMonitor(row)
-}
-
-func (s *Store) GetCronMonitorByToken(ctx context.Context, token string) (*CronMonitor, error) {
-	row := s.DB.QueryRowContext(ctx, `
-		SELECT id, project_id, slug, name, schedule_sec, grace_sec, environment, status,
-		       last_checkin_at, next_expected_at, token, created_at
-		FROM cron_monitors WHERE token = ?
-	`, token)
-	return scanCronMonitor(row)
-}
-
-func (s *Store) ListCronMonitors(ctx context.Context, projectID int64) ([]CronMonitor, error) {
-	q := `
-		SELECT id, project_id, slug, name, schedule_sec, grace_sec, environment, status,
-		       last_checkin_at, next_expected_at, token, created_at
-		FROM cron_monitors`
-	args := []any{}
-	if projectID > 0 {
-		q += ` WHERE project_id = ?`
-		args = append(args, projectID)
+	var row CronMonitorRow
+	err := s.DB.WithContext(ctx).First(&row, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
 	}
-	q += ` ORDER BY name ASC`
-	rows, err := s.DB.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []CronMonitor
-	for rows.Next() {
-		m, err := scanCronMonitor(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *m)
+	return cronMonitorFromRow(&row), nil
+}
+
+func (s *Store) GetCronMonitorByToken(ctx context.Context, token string) (*CronMonitor, error) {
+	var row CronMonitorRow
+	err := s.DB.WithContext(ctx).Where("token = ?", token).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
 	}
-	return out, rows.Err()
+	if err != nil {
+		return nil, err
+	}
+	return cronMonitorFromRow(&row), nil
+}
+
+func (s *Store) ListCronMonitors(ctx context.Context, projectID int64) ([]CronMonitor, error) {
+	q := s.DB.WithContext(ctx).Model(&CronMonitorRow{})
+	if projectID > 0 {
+		q = q.Where("project_id = ?", projectID)
+	}
+	var rows []CronMonitorRow
+	if err := q.Order("name ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]CronMonitor, 0, len(rows))
+	for i := range rows {
+		out = append(out, *cronMonitorFromRow(&rows[i]))
+	}
+	return out, nil
 }
 
 func (s *Store) DeleteCronMonitor(ctx context.Context, id int64) error {
-	_, err := s.DB.ExecContext(ctx, `DELETE FROM cron_monitors WHERE id = ?`, id)
-	return err
+	return s.DB.WithContext(ctx).Delete(&CronMonitorRow{}, id).Error
 }
 
 func (s *Store) UpdateCronMonitor(ctx context.Context, id int64, name string, scheduleSec, graceSec int64, env string) (*CronMonitor, error) {
@@ -169,9 +169,12 @@ func (s *Store) UpdateCronMonitor(ctx context.Context, id int64, name string, sc
 	if graceSec <= 0 {
 		graceSec = m.GraceSec
 	}
-	_, err = s.DB.ExecContext(ctx, `
-		UPDATE cron_monitors SET name = ?, schedule_sec = ?, grace_sec = ?, environment = ? WHERE id = ?
-	`, name, scheduleSec, graceSec, nullOrNil(env), id)
+	err = s.DB.WithContext(ctx).Model(&CronMonitorRow{}).Where("id = ?", id).Updates(map[string]any{
+		"name":         name,
+		"schedule_sec": scheduleSec,
+		"grace_sec":    graceSec,
+		"environment":  strPtrOrNil(env),
+	}).Error
 	if err != nil {
 		return nil, err
 	}
@@ -186,37 +189,29 @@ func (s *Store) RecordCronCheckin(ctx context.Context, monitorID int64, status s
 	now := time.Now().UTC()
 	ts := now.Format(time.RFC3339Nano)
 
-	tx, err := s.DB.BeginTx(ctx, nil)
+	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var mon CronMonitorRow
+		if err := tx.First(&mon, monitorID).Error; err != nil {
+			return err
+		}
+		next := now.Add(time.Duration(mon.ScheduleSec) * time.Second).Format(time.RFC3339Nano)
+		checkin := CronCheckinRow{
+			MonitorID:  monitorID,
+			Status:     status,
+			DurationMS: durationMS,
+			Timestamp:  ts,
+		}
+		if err := tx.Create(&checkin).Error; err != nil {
+			return err
+		}
+		monStatus := "ok"
+		return tx.Model(&CronMonitorRow{}).Where("id = ?", monitorID).Updates(map[string]any{
+			"status":           monStatus,
+			"last_checkin_at":  ts,
+			"next_expected_at": next,
+		}).Error
+	})
 	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
-	var scheduleSec int64
-	err = tx.QueryRowContext(ctx, `SELECT schedule_sec FROM cron_monitors WHERE id = ?`, monitorID).Scan(&scheduleSec)
-	if err != nil {
-		return nil, err
-	}
-	next := now.Add(time.Duration(scheduleSec) * time.Second).Format(time.RFC3339Nano)
-
-	_, err = tx.ExecContext(ctx, `
-		INSERT INTO cron_checkins (monitor_id, status, duration_ms, timestamp) VALUES (?, ?, ?, ?)
-	`, monitorID, status, durationMS, ts)
-	if err != nil {
-		return nil, err
-	}
-
-	monStatus := "ok"
-	if status == "error" {
-		monStatus = "ok" // reported, even if job failed — miss/late is about heartbeat absence
-	}
-	_, err = tx.ExecContext(ctx, `
-		UPDATE cron_monitors SET status = ?, last_checkin_at = ?, next_expected_at = ? WHERE id = ?
-	`, monStatus, ts, next, monitorID)
-	if err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return s.GetCronMonitor(ctx, monitorID)
@@ -231,34 +226,15 @@ type CronStatusChange struct {
 // EvaluateCronMonitors marks late/missed monitors. Missed = past next+grace; late = past next but within grace.
 func (s *Store) EvaluateCronMonitors(ctx context.Context) ([]CronStatusChange, error) {
 	now := time.Now().UTC()
-	rows, err := s.DB.QueryContext(ctx, `
-		SELECT id, project_id, slug, name, schedule_sec, grace_sec, environment, status,
-		       last_checkin_at, next_expected_at, token, created_at
-		FROM cron_monitors
-		WHERE next_expected_at IS NOT NULL
-	`)
+	var rows []CronMonitorRow
+	err := s.DB.WithContext(ctx).Where("next_expected_at IS NOT NULL").Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
 
-	var monitors []CronMonitor
-	for rows.Next() {
-		m, err := scanCronMonitor(rows)
-		if err != nil {
-			rows.Close()
-			return nil, err
-		}
-		monitors = append(monitors, *m)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return nil, err
-	}
-	rows.Close()
-
 	var changes []CronStatusChange
-	for i := range monitors {
-		m := &monitors[i]
+	for i := range rows {
+		m := cronMonitorFromRow(&rows[i])
 		if m.NextExpectedAt == nil {
 			continue
 		}
@@ -275,8 +251,7 @@ func (s *Store) EvaluateCronMonitors(ctx context.Context) ([]CronStatusChange, e
 			newStatus = "late"
 		}
 		if newStatus != prev && (newStatus == "late" || newStatus == "missed") {
-			_, err = s.DB.ExecContext(ctx, `UPDATE cron_monitors SET status = ? WHERE id = ?`, newStatus, m.ID)
-			if err != nil {
+			if err := s.DB.WithContext(ctx).Model(&CronMonitorRow{}).Where("id = ?", m.ID).Update("status", newStatus).Error; err != nil {
 				return nil, err
 			}
 			m.Status = newStatus
@@ -293,21 +268,19 @@ func parseFlexibleTime(s string) (time.Time, error) {
 	return time.Parse(time.RFC3339, s)
 }
 
-func scanCronMonitor(row scannable) (*CronMonitor, error) {
-	var m CronMonitor
-	var env, last, next sql.NullString
-	err := row.Scan(
-		&m.ID, &m.ProjectID, &m.Slug, &m.Name, &m.ScheduleSec, &m.GraceSec, &env, &m.Status,
-		&last, &next, &m.Token, &m.CreatedAt,
-	)
-	if err == sql.ErrNoRows {
-		return nil, nil
+func cronMonitorFromRow(row *CronMonitorRow) *CronMonitor {
+	return &CronMonitor{
+		ID:             row.ID,
+		ProjectID:      row.ProjectID,
+		Slug:           row.Slug,
+		Name:           row.Name,
+		ScheduleSec:    row.ScheduleSec,
+		GraceSec:       row.GraceSec,
+		Environment:    row.Environment,
+		Status:         row.Status,
+		LastCheckinAt:  row.LastCheckinAt,
+		NextExpectedAt: row.NextExpectedAt,
+		Token:          row.Token,
+		CreatedAt:      row.CreatedAt,
 	}
-	if err != nil {
-		return nil, err
-	}
-	m.Environment = nullStr(env)
-	m.LastCheckinAt = nullStr(last)
-	m.NextExpectedAt = nullStr(next)
-	return &m, nil
 }
