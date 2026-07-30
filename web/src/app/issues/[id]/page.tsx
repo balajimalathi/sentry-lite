@@ -108,6 +108,7 @@ export default function IssueDetailPage() {
   const frames: Frame[] = payload?.frames ?? []
   const tags = latest?.tags ?? payload?.tags ?? {}
   const breadcrumbs = payload?.breadcrumbs ?? []
+  const traceId = latest?.trace_id ?? payload?.trace_id ?? null
   const user = {
     id: latest?.user_id ?? payload?.user?.id,
     email: latest?.user_email ?? payload?.user?.email,
@@ -205,6 +206,18 @@ export default function IssueDetailPage() {
           </Card>
         ))}
       </div>
+
+      {traceId && (
+        <p className="text-sm">
+          Trace:{' '}
+          <Link
+            to={`/traces/${traceId}`}
+            className="font-mono underline-offset-4 hover:underline"
+          >
+            {traceId}
+          </Link>
+        </p>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[2fr_1fr_1fr]">
         <Collapsible open={expanded} onOpenChange={setExpanded}>

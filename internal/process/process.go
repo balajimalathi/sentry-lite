@@ -64,6 +64,69 @@ func (w *Worker) handle(ctx context.Context, value []byte) error {
 		return err
 	}
 
+	kind := msg.Kind
+	if kind == "" {
+		var peek map[string]any
+		if json.Unmarshal(msg.Payload, &peek) == nil {
+			if t, _ := peek["type"].(string); t == "transaction" {
+				kind = "transaction"
+			}
+		}
+		if kind == "" {
+			kind = "error"
+		}
+	}
+
+	if kind == "transaction" {
+		return w.handleTransaction(ctx, msg, rawPath)
+	}
+	return w.handleError(ctx, msg, rawPath)
+}
+
+func (w *Worker) handleTransaction(ctx context.Context, msg ingest.IngestMessage, rawPath string) error {
+	norm, err := NormalizeTransaction(msg.Payload)
+	if err != nil {
+		return err
+	}
+	if norm.EventID == "" {
+		norm.EventID = msg.EventID
+	}
+	summary, _ := json.Marshal(map[string]any{
+		"transaction": norm.Name,
+		"op":          norm.Op,
+		"trace_id":    norm.TraceID,
+		"status":      norm.Status,
+		"duration_ms": norm.DurationMS,
+		"spans":       norm.Spans,
+	})
+	err = w.Store.InsertTransaction(ctx, store.InsertTransactionInput{
+		EventID:     norm.EventID,
+		ProjectID:   msg.ProjectID,
+		Name:        norm.Name,
+		Op:          norm.Op,
+		TraceID:     norm.TraceID,
+		SpanID:      norm.SpanID,
+		DurationMS:  norm.DurationMS,
+		Status:      norm.Status,
+		Environment: norm.Environment,
+		Release:     norm.Release,
+		Timestamp:   norm.Timestamp,
+		RawPath:     rawPath,
+		PayloadJSON: string(summary),
+		Spans:       norm.Spans,
+	})
+	if err != nil {
+		return err
+	}
+	if norm.Release != "" {
+		if _, err := w.Store.UpsertRelease(ctx, msg.ProjectID, norm.Release, "", ""); err != nil {
+			log.Printf("upsert release: %v", err)
+		}
+	}
+	return nil
+}
+
+func (w *Worker) handleError(ctx context.Context, msg ingest.IngestMessage, rawPath string) error {
 	norm, err := Normalize(msg.Payload)
 	if err != nil {
 		return err
@@ -110,6 +173,7 @@ func (w *Worker) handle(ctx context.Context, value []byte) error {
 		"request":        norm.Request,
 		"tags":           norm.Tags,
 		"breadcrumbs":    norm.Breadcrumbs,
+		"trace_id":       norm.TraceID,
 	})
 
 	result, err := w.Store.UpsertEvent(ctx, store.UpsertEventInput{
@@ -127,6 +191,7 @@ func (w *Worker) handle(ctx context.Context, value []byte) error {
 		ExceptionType: norm.ExceptionType,
 		UserID:        norm.User.ID,
 		UserEmail:     norm.User.Email,
+		TraceID:       norm.TraceID,
 		RawPath:       rawPath,
 		PayloadJSON:   string(summary),
 		Tags:          norm.Tags,
@@ -193,6 +258,21 @@ type Normalized struct {
 	User          User
 	Request       map[string]any
 	Breadcrumbs   []any
+	TraceID       string
+}
+
+type NormalizedTransaction struct {
+	EventID     string
+	Name        string
+	Op          string
+	TraceID     string
+	SpanID      string
+	DurationMS  float64
+	Status      string
+	Environment string
+	Release     string
+	Timestamp   time.Time
+	Spans       []store.Span
 }
 
 type Frame struct {
@@ -279,7 +359,94 @@ func Normalize(payload []byte) (*Normalized, error) {
 	}
 
 	n.ExceptionType, n.Message, n.Frames = extractException(raw)
+	n.TraceID = extractTraceID(raw)
 	return n, nil
+}
+
+func NormalizeTransaction(payload []byte) (*NormalizedTransaction, error) {
+	var raw map[string]any
+	if err := json.Unmarshal(payload, &raw); err != nil {
+		return nil, err
+	}
+	n := &NormalizedTransaction{}
+	if id, ok := raw["event_id"].(string); ok {
+		n.EventID = strings.ReplaceAll(id, "-", "")
+	}
+	n.Name = asString(raw["transaction"])
+	if n.Name == "" {
+		n.Name = "unnamed"
+	}
+	n.Environment = asString(raw["environment"])
+	n.Release = asString(raw["release"])
+	n.Timestamp = parseTimestamp(raw["timestamp"])
+	start := parseTimestamp(raw["start_timestamp"])
+	if !start.IsZero() && !n.Timestamp.IsZero() && n.Timestamp.After(start) {
+		n.DurationMS = float64(n.Timestamp.Sub(start).Microseconds()) / 1000.0
+	}
+
+	if tags, ok := raw["tags"].(map[string]any); ok {
+		if n.Environment == "" {
+			n.Environment = fmt.Sprint(tags["environment"])
+			if n.Environment == "<nil>" {
+				n.Environment = ""
+			}
+		}
+		if n.Release == "" {
+			n.Release = fmt.Sprint(tags["release"])
+			if n.Release == "<nil>" {
+				n.Release = ""
+			}
+		}
+	}
+
+	if ctxs, ok := raw["contexts"].(map[string]any); ok {
+		if tr, ok := ctxs["trace"].(map[string]any); ok {
+			n.TraceID = strings.ReplaceAll(asString(tr["trace_id"]), "-", "")
+			n.SpanID = asString(tr["span_id"])
+			n.Op = asString(tr["op"])
+			n.Status = asString(tr["status"])
+		}
+	}
+	if n.Status == "" {
+		n.Status = asString(raw["status"])
+	}
+
+	if spans, ok := raw["spans"].([]any); ok {
+		for _, item := range spans {
+			sm, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			spStart := parseTimestamp(sm["start_timestamp"])
+			spEnd := parseTimestamp(sm["timestamp"])
+			dur := 0.0
+			if !spStart.IsZero() && !spEnd.IsZero() && spEnd.After(spStart) {
+				dur = float64(spEnd.Sub(spStart).Microseconds()) / 1000.0
+			}
+			desc := asString(sm["description"])
+			if desc == "" {
+				desc = asString(sm["op"])
+			}
+			n.Spans = append(n.Spans, store.Span{
+				SpanID:       asString(sm["span_id"]),
+				ParentSpanID: asString(sm["parent_span_id"]),
+				Op:           asString(sm["op"]),
+				Description:  desc,
+				DurationMS:   dur,
+				Status:       asString(sm["status"]),
+			})
+		}
+	}
+	return n, nil
+}
+
+func extractTraceID(raw map[string]any) string {
+	if ctxs, ok := raw["contexts"].(map[string]any); ok {
+		if tr, ok := ctxs["trace"].(map[string]any); ok {
+			return strings.ReplaceAll(asString(tr["trace_id"]), "-", "")
+		}
+	}
+	return ""
 }
 
 func extractException(raw map[string]any) (exType, message string, frames []Frame) {

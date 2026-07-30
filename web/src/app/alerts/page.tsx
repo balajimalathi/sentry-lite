@@ -95,9 +95,9 @@ export default function AlertsPage() {
     <section className="flex flex-col gap-4">
       <h1 className="font-heading text-2xl font-medium tracking-tight">Alerts</h1>
       <p className="text-sm text-muted-foreground">
-        Rules for new issues, regressions, and error volume. Channels: Slack
-        webhook URL, email (ALERT_SMTP), signed webhook, or Telegram (bot token
-        + chat id — sends a connect sample on create).
+        Rules for new issues, regressions, error volume, and missed crons.
+        Channels: Slack webhook URL, email (ALERT_SMTP), signed webhook, or
+        Telegram (bot token + chat id — sends a connect sample on create).
       </p>
       {error && (
         <Alert variant="destructive">
@@ -141,6 +141,7 @@ export default function AlertsPage() {
                 { label: 'New issue', value: 'new_issue' },
                 { label: 'Regressed', value: 'regressed_issue' },
                 { label: 'Error volume', value: 'error_volume' },
+                { label: 'Cron missed', value: 'cron_missed' },
               ]}
               value={trigger}
               onValueChange={(v) => setTrigger(String(v ?? 'new_issue'))}
@@ -153,6 +154,7 @@ export default function AlertsPage() {
                   <SelectItem value="new_issue">New issue</SelectItem>
                   <SelectItem value="regressed_issue">Regressed</SelectItem>
                   <SelectItem value="error_volume">Error volume</SelectItem>
+                  <SelectItem value="cron_missed">Cron missed</SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>

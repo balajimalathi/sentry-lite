@@ -125,3 +125,36 @@ curl -s -X POST http://localhost:8080/api/internal/releases \
 go run ./cmd/sentry-lite-release -version=1.2.3
 cd web && bun run dev
 ```
+
+---
+
+# V2 Feature Validation Results
+
+**Date:** 2026-07-30  
+**Against:** [PLAN.md](PLAN.md) V2 acceptance criteria  
+
+## Summary
+
+| § | Area | Result |
+|---|------|--------|
+| 1 | Performance tracing | **Implemented** — SDK envelope transactions, list p95/p99, detail spans, trace↔issue link |
+| 2 | Cron/heartbeat | **Implemented** — register, check-in API, late/missed watcher, `cron_missed` alerts |
+| 3 | UI integration | **Implemented** — Performance, Traces, Crons nav in same SPA |
+| 4 | Operational impact | **Assumed OK** at target scale (SQLite + Redpanda mixed workload) |
+
+## Smoke commands
+
+```bash
+# Performance
+cd examples/node-sdk && bun run send-perf.ts
+curl -s 'http://localhost:8080/api/internal/transactions?project_id=1' | jq .
+
+# Cron
+curl -s -X POST http://localhost:8080/api/internal/crons \
+  -H 'Content-Type: application/json' \
+  -d '{"project_id":1,"name":"demo-job","schedule_sec":60,"grace_sec":10}'
+curl -s -X POST http://localhost:8080/api/cron/check-in/<token>
+curl -s 'http://localhost:8080/api/internal/crons?project_id=1' | jq .
+```
+
+Helper: [scripts/v2_validate.py](scripts/v2_validate.py)

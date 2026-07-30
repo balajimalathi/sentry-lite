@@ -24,6 +24,7 @@ type Handler struct {
 type IngestMessage struct {
 	ProjectID int64           `json:"project_id"`
 	EventID   string          `json:"event_id"`
+	Kind      string          `json:"kind"` // error | transaction
 	Payload   json.RawMessage `json:"payload"`
 }
 
@@ -51,7 +52,7 @@ func (h *Handler) HandleEnvelope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eventJSON, eventID, err := extractEventFromEnvelope(body)
+	eventJSON, eventID, kind, err := extractEventFromEnvelope(body)
 	if err != nil {
 		// Non-event envelopes (session, client_report, etc.) — ack without enqueue
 		log.Printf("envelope skip: %v", err)
@@ -71,7 +72,7 @@ func (h *Handler) HandleEnvelope(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := h.enqueue(r.Context(), projectID, eventID, eventJSON); err != nil {
+	if err := h.enqueue(r.Context(), projectID, eventID, kind, eventJSON); err != nil {
 		log.Printf("enqueue: %v", err)
 		http.Error(w, "enqueue failed", http.StatusServiceUnavailable)
 		return
@@ -109,7 +110,7 @@ func (h *Handler) HandleStore(w http.ResponseWriter, r *http.Request) {
 		body, _ = json.Marshal(m)
 	}
 
-	if err := h.enqueue(r.Context(), projectID, eventID, body); err != nil {
+	if err := h.enqueue(r.Context(), projectID, eventID, kindFromPayload(m), body); err != nil {
 		log.Printf("enqueue: %v", err)
 		http.Error(w, "enqueue failed", http.StatusServiceUnavailable)
 		return
@@ -117,8 +118,11 @@ func (h *Handler) HandleStore(w http.ResponseWriter, r *http.Request) {
 	writeEventID(w, eventID)
 }
 
-func (h *Handler) enqueue(ctx context.Context, projectID int64, eventID string, payload []byte) error {
-	msg := IngestMessage{ProjectID: projectID, EventID: eventID, Payload: payload}
+func (h *Handler) enqueue(ctx context.Context, projectID int64, eventID, kind string, payload []byte) error {
+	if kind == "" {
+		kind = "error"
+	}
+	msg := IngestMessage{ProjectID: projectID, EventID: eventID, Kind: kind, Payload: payload}
 	b, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -166,13 +170,13 @@ func extractPublicKey(r *http.Request) string {
 	return ""
 }
 
-func extractEventFromEnvelope(body []byte) (json.RawMessage, string, error) {
+func extractEventFromEnvelope(body []byte) (json.RawMessage, string, string, error) {
 	// Envelope: <header>\n then repeating <item_header>\n<payload>\n
 	offset := 0
 	// skip envelope header line
 	idx := bytes.IndexByte(body[offset:], '\n')
 	if idx < 0 {
-		return nil, "", errInvalidEnvelope
+		return nil, "", "", errInvalidEnvelope
 	}
 	offset += idx + 1
 
@@ -202,7 +206,7 @@ func extractEventFromEnvelope(body []byte) (json.RawMessage, string, error) {
 		if length > 0 {
 			end := offset + length
 			if end > len(body) {
-				return nil, "", errInvalidEnvelope
+				return nil, "", "", errInvalidEnvelope
 			}
 			payload = body[offset:end]
 			offset = end
@@ -220,18 +224,37 @@ func extractEventFromEnvelope(body []byte) (json.RawMessage, string, error) {
 			}
 		}
 
-		if typ == "event" {
+		if typ == "event" || typ == "transaction" {
+			kind := "error"
+			if typ == "transaction" {
+				kind = "transaction"
+			}
 			eventID := ""
 			var m map[string]any
 			if json.Unmarshal(payload, &m) == nil {
 				if id, ok := m["event_id"].(string); ok {
 					eventID = strings.ReplaceAll(id, "-", "")
 				}
+				if typ == "event" && kindFromPayload(m) == "transaction" {
+					kind = "transaction"
+				}
 			}
-			return json.RawMessage(bytes.Clone(payload)), eventID, nil
+			return json.RawMessage(bytes.Clone(payload)), eventID, kind, nil
 		}
 	}
-	return nil, "", errInvalidEnvelope
+	return nil, "", "", errInvalidEnvelope
+}
+
+func kindFromPayload(m map[string]any) string {
+	if t, ok := m["type"].(string); ok && t == "transaction" {
+		return "transaction"
+	}
+	if _, ok := m["transaction"].(string); ok {
+		if _, hasEx := m["exception"]; !hasEx {
+			return "transaction"
+		}
+	}
+	return "error"
 }
 
 var errInvalidEnvelope = &parseError{"no event item"}

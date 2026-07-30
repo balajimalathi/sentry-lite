@@ -4,7 +4,8 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "send": "bun run send.ts"
+    "send": "bun run send.ts",
+    "send-perf": "bun run send-perf.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"

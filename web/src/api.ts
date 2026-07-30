@@ -62,9 +62,64 @@ export type Event = {
   culprit: string | null
   user_id: string | null
   user_email: string | null
+  trace_id?: string | null
   raw_path: string
   payload_json?: string
   tags?: Record<string, string>
+}
+
+export type TransactionSummary = {
+  name: string
+  count: number
+  p95_ms: number
+  p99_ms: number
+  project_id: number
+}
+
+export type Span = {
+  span_id: string
+  parent_span_id: string
+  op: string
+  description: string
+  duration_ms: number
+  status: string
+}
+
+export type TransactionSample = {
+  id: number
+  event_id: string
+  project_id: number
+  name: string
+  op: string
+  trace_id: string
+  span_id: string
+  duration_ms: number
+  status: string
+  environment: string | null
+  release: string | null
+  timestamp: string
+  spans?: Span[]
+}
+
+export type TraceDetail = {
+  trace_id: string
+  transactions: TransactionSample[]
+  issues: Array<{ issue_id: number; title: string; event_id: string }>
+}
+
+export type CronMonitor = {
+  id: number
+  project_id: number
+  slug: string
+  name: string
+  schedule_sec: number
+  grace_sec: number
+  environment: string | null
+  status: string
+  last_checkin_at: string | null
+  next_expected_at: string | null
+  token: string
+  created_at: string
 }
 
 export type Release = {
@@ -171,6 +226,38 @@ export const api = {
     target: string
     secret?: string
   }) => post<AlertRule>('/api/internal/alerts', body),
+  transactions: (projectId: string) =>
+    get<TransactionSummary[]>(
+      `/api/internal/transactions?project_id=${projectId}`
+    ),
+  transaction: (name: string, projectId: string) =>
+    get<{
+      name: string
+      summary: TransactionSummary | null
+      samples: TransactionSample[]
+    }>(
+      `/api/internal/transaction?project_id=${projectId}&name=${encodeURIComponent(name)}`
+    ),
+  trace: (traceId: string) =>
+    get<TraceDetail>(`/api/internal/traces/${encodeURIComponent(traceId)}`),
+  crons: (projectId?: string) =>
+    get<CronMonitor[]>(
+      projectId
+        ? `/api/internal/crons?project_id=${projectId}`
+        : '/api/internal/crons'
+    ),
+  createCron: (body: {
+    project_id: number
+    name: string
+    slug?: string
+    schedule_sec: number
+    grace_sec?: number
+    environment?: string
+  }) => post<CronMonitor>('/api/internal/crons', body),
+  deleteCron: async (id: number) => {
+    const res = await fetch(`/api/internal/crons/${id}`, { method: 'DELETE' })
+    if (!res.ok) throw new Error(`${res.status}`)
+  },
 }
 
 export function formatTime(iso: string | null | undefined) {
@@ -196,6 +283,7 @@ export function parsePayload(ev: Event | null) {
       }>
       exception_type?: string
       message?: string
+      trace_id?: string
     }
   } catch {
     return null

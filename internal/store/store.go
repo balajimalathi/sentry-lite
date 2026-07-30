@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -67,6 +68,7 @@ type Event struct {
 	Culprit       *string           `json:"culprit"`
 	UserID        *string           `json:"user_id"`
 	UserEmail     *string           `json:"user_email"`
+	TraceID       *string           `json:"trace_id,omitempty"`
 	RawPath       string            `json:"raw_path"`
 	PayloadJSON   string            `json:"payload_json,omitempty"`
 	Tags          map[string]string `json:"tags,omitempty"`
@@ -126,6 +128,7 @@ func (s *Store) migrate() error {
 			names = append(names, e.Name())
 		}
 	}
+	sort.Strings(names)
 	for _, name := range names {
 		b, err := migrationFS.ReadFile("migrations/" + name)
 		if err != nil {
@@ -391,7 +394,7 @@ func (s *Store) ListEventsForIssue(ctx context.Context, issueID int64, limit int
 	}
 	rows, err := s.DB.QueryContext(ctx, `
 		SELECT id, event_id, issue_id, project_id, timestamp, environment, release, platform,
-		       message, exception_type, culprit, user_id, user_email, raw_path, payload_json
+		       message, exception_type, culprit, user_id, user_email, raw_path, payload_json, trace_id
 		FROM events WHERE issue_id = ? ORDER BY timestamp DESC LIMIT ?
 	`, issueID, limit)
 	if err != nil {
@@ -439,14 +442,15 @@ func scanEvents(rows *sql.Rows) ([]Event, error) {
 	var out []Event
 	for rows.Next() {
 		var e Event
-		var env, rel, plat, msg, exType, culprit, uid, uemail sql.NullString
+		var env, rel, plat, msg, exType, culprit, uid, uemail, traceID sql.NullString
 		if err := rows.Scan(
 			&e.ID, &e.EventID, &e.IssueID, &e.ProjectID, &e.Timestamp,
-			&env, &rel, &plat, &msg, &exType, &culprit, &uid, &uemail, &e.RawPath, &e.PayloadJSON,
+			&env, &rel, &plat, &msg, &exType, &culprit, &uid, &uemail, &e.RawPath, &e.PayloadJSON, &traceID,
 		); err != nil {
 			return nil, err
 		}
 		e.Environment = nullStr(env)
+		e.TraceID = nullStr(traceID)
 		e.Release = nullStr(rel)
 		e.Platform = nullStr(plat)
 		e.Message = nullStr(msg)
@@ -481,6 +485,7 @@ type UpsertEventInput struct {
 	ExceptionType string
 	UserID        string
 	UserEmail     string
+	TraceID       string
 	RawPath       string
 	PayloadJSON   string
 	Tags          map[string]string
@@ -561,11 +566,11 @@ func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertRe
 	_, err = tx.ExecContext(ctx, `
 		INSERT OR IGNORE INTO events (
 			event_id, issue_id, project_id, timestamp, environment, release, platform,
-			message, exception_type, culprit, user_id, user_email, raw_path, payload_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			message, exception_type, culprit, user_id, user_email, raw_path, payload_json, trace_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`, in.EventID, issueID, in.ProjectID, ts, nullOrNil(in.Environment), nullOrNil(in.Release), nullOrNil(in.Platform),
 		nullOrNil(in.Message), nullOrNil(in.ExceptionType), nullOrNil(in.Culprit),
-		nullOrNil(in.UserID), nullOrNil(in.UserEmail), in.RawPath, in.PayloadJSON)
+		nullOrNil(in.UserID), nullOrNil(in.UserEmail), in.RawPath, in.PayloadJSON, nullOrNil(in.TraceID))
 	if err != nil {
 		return nil, err
 	}

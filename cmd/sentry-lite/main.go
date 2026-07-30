@@ -43,18 +43,26 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
+	alertDisp := &alerts.Dispatcher{
+		Store:   st,
+		APIBase: cfg.PublicURL,
+		SMTP:    cfg.AlertSMTP,
+		From:    cfg.AlertFrom,
+	}
+
 	worker := &process.Worker{
 		Store:   st,
 		Bus:     b,
 		DataDir: cfg.DataDir,
-		Alerts: &alerts.Dispatcher{
-			Store:   st,
-			APIBase: cfg.PublicURL,
-			SMTP:    cfg.AlertSMTP,
-			From:    cfg.AlertFrom,
-		},
+		Alerts:  alertDisp,
 	}
 	go worker.Run(ctx)
+
+	rollup := &process.RollupWorker{Store: st}
+	go rollup.Run(ctx)
+
+	cronWatch := &process.CronWatcher{Store: st, Alerts: alertDisp}
+	go cronWatch.Run(ctx)
 
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
@@ -114,7 +122,7 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 			if origin != "" && (allowed[origin] || allowed["*"]) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Sentry-Auth, Authorization")
-				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, OPTIONS")
+				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 			}
 			if r.Method == http.MethodOptions {
 				w.WriteHeader(http.StatusNoContent)

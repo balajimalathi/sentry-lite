@@ -20,7 +20,7 @@ type Config struct {
 
 func Load() Config {
 	brokers := env("REDPANDA_BROKERS", "localhost:19092")
-	cors := env("CORS_ORIGINS", "http://localhost:5173")
+	cors := env("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
 	return Config{
 		HTTPAddr:        env("HTTP_ADDR", ":8080"),
 		SQLitePath:      env("SQLITE_PATH", "./data/sentry-lite.db"),

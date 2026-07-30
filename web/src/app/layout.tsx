@@ -45,6 +45,32 @@ export default function RootLayout() {
                 Issues
               </NavLink>
               <NavLink
+                to="/performance"
+                className={({ isActive }) =>
+                  cn(
+                    buttonVariants({ variant: 'ghost', size: 'sm' }),
+                    isActive
+                      ? 'bg-muted text-foreground'
+                      : 'text-muted-foreground'
+                  )
+                }
+              >
+                Performance
+              </NavLink>
+              <NavLink
+                to="/crons"
+                className={({ isActive }) =>
+                  cn(
+                    buttonVariants({ variant: 'ghost', size: 'sm' }),
+                    isActive
+                      ? 'bg-muted text-foreground'
+                      : 'text-muted-foreground'
+                  )
+                }
+              >
+                Crons
+              </NavLink>
+              <NavLink
                 to="/releases"
                 className={({ isActive }) =>
                   cn(
