@@ -82,7 +82,7 @@ After a large run, stop the load tool **and** the API/TUI before wiping. Reset S
 ./scripts/wipe-local.sh --yes
 ```
 
-See [README troubleshooting](../README.md#ghost-issues--load-test-leftovers).
+See [README troubleshooting](../README.md#troubleshooting).
 
 Restart the load TUI after rebuilding to pick up the new RAM/storage cards.
 
