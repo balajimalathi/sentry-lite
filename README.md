@@ -110,12 +110,12 @@ Then open Issues / Performance in the UI.
 ### Next.js sample (Bun + shadcn)
 
 ```bash
-cd sample
+cd examples/nextjs
 bun install
 bun run dev
 ```
 
-Points `@sentry/nextjs` at project 3 — see [`sample/README.md`](sample/README.md).
+Points `@sentry/nextjs` at project 3 — full feature playground (errors, mock APIs / performance, releases, crons, alerts). See [`examples/nextjs/README.md`](examples/nextjs/README.md).
 
 ### Cron check-in
 

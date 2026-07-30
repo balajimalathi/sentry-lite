@@ -1,9 +1,5 @@
-import { ErrorTriggers } from "@/components/error-triggers"
+import { FeaturePlayground } from "@/components/feature-playground"
 
 export default function Page() {
-  return (
-    <div className="flex min-h-svh items-center justify-center p-6">
-      <ErrorTriggers />
-    </div>
-  )
+  return <FeaturePlayground />
 }
