@@ -1,7 +1,12 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
 import { AlertCircleIcon } from 'lucide-react'
-import { api } from '@/api'
+import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
+import { api, type AlertRule } from '@/api'
+import { DataTable } from '@/components/data-table/data-table'
+import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
+import { ListDataTableFilters } from '@/components/list-data-table-filters'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -23,18 +28,48 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
+import { useDataTable } from '@/hooks/use-data-table'
+import { firstFilterValue } from '@/lib/row-filters'
+
+const BASIC_FILTER_KEYS = [
+  'project_id',
+  'name',
+  'trigger',
+  'channel',
+  'enabled',
+] as const
+
+const TRIGGER_OPTIONS = [
+  { label: 'New issue', value: 'new_issue' },
+  { label: 'Regressed', value: 'regressed_issue' },
+  { label: 'Error volume', value: 'error_volume' },
+  { label: 'Cron missed', value: 'cron_missed' },
+]
+
+const CHANNEL_OPTIONS = [
+  { label: 'Webhook', value: 'webhook' },
+  { label: 'Slack', value: 'slack' },
+  { label: 'Email', value: 'email' },
+  { label: 'Telegram', value: 'telegram' },
+]
+
+function maskTelegramTarget(target: string) {
+  const i = target.indexOf('|')
+  if (i <= 0) return '••••'
+  return `${target.slice(0, 6)}…|${target.slice(i + 1)}`
+}
 
 export default function AlertsPage() {
   const qc = useQueryClient()
-  const [projectId, setProjectId] = useState('')
+  const [basicFilterValues] = useQueryStates({
+    project_id: parseAsArrayOf(parseAsString, ','),
+    name: parseAsString,
+    trigger: parseAsArrayOf(parseAsString, ','),
+    channel: parseAsArrayOf(parseAsString, ','),
+    enabled: parseAsArrayOf(parseAsString, ','),
+  })
+
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('New issue alert')
   const [trigger, setTrigger] = useState('new_issue')
@@ -43,26 +78,41 @@ export default function AlertsPage() {
   const [botToken, setBotToken] = useState('')
   const [chatId, setChatId] = useState('')
   const [threshold, setThreshold] = useState('10')
-  const [error, setError] = useState('')
   const [formError, setFormError] = useState('')
+
+  const basicColumnFilters = useMemo<ColumnFiltersState>(() => {
+    const filters: ColumnFiltersState = []
+    for (const key of BASIC_FILTER_KEYS) {
+      const value = basicFilterValues[key]
+      if (value == null || value === '') continue
+      filters.push({ id: key, value })
+    }
+    return filters
+  }, [basicFilterValues])
 
   const projectsQuery = useQuery({
     queryKey: ['projects'],
     queryFn: () => api.projects(),
   })
 
-  useEffect(() => {
-    const projects = projectsQuery.data
-    if (!projects?.length) return
-    if (!projectId || !projects.some((p) => String(p.id) === projectId)) {
-      setProjectId(String(projects[0].id))
-    }
-  }, [projectsQuery.data, projectId])
+  const projects = projectsQuery.data ?? []
+  const projectOptions = useMemo(
+    () => projects.map((p) => ({ label: p.name, value: String(p.id) })),
+    [projects]
+  )
+
+  const selectedProjectId = firstFilterValue(
+    basicColumnFilters.find((f) => f.id === 'project_id')?.value
+  )
+
+  // Alerts: empty project = all; for create dialog default to first project.
+  const listProjectId = selectedProjectId
+  const createProjectId =
+    selectedProjectId || (projects[0] ? String(projects[0].id) : '')
 
   const rulesQuery = useQuery({
-    queryKey: ['alerts', projectId],
-    queryFn: () => api.alerts(projectId),
-    enabled: !!projectId,
+    queryKey: ['alerts', listProjectId || 'all'],
+    queryFn: () => api.alerts(listProjectId || undefined),
   })
 
   const createMutation = useMutation({
@@ -70,7 +120,7 @@ export default function AlertsPage() {
       const resolvedTarget =
         channel === 'telegram' ? `${botToken.trim()}|${chatId.trim()}` : target
       return api.createAlert({
-        project_id: Number(projectId),
+        project_id: Number(createProjectId),
         name,
         trigger,
         channel,
@@ -85,24 +135,147 @@ export default function AlertsPage() {
       setBotToken('')
       setChatId('')
       setFormError('')
-      setError('')
       setOpen(false)
-      void qc.invalidateQueries({ queryKey: ['alerts', projectId] })
+      void qc.invalidateQueries({ queryKey: ['alerts'] })
     },
     onError: (e) => setFormError(String(e)),
   })
+
+  const enabledOptions = useMemo(
+    () => [
+      { label: 'Enabled', value: 'true' },
+      { label: 'Disabled', value: 'false' },
+    ],
+    []
+  )
+
+  const columns = useMemo<ColumnDef<AlertRule>[]>(
+    () => [
+      {
+        id: 'name',
+        accessorKey: 'name',
+        enableColumnFilter: true,
+        meta: {
+          label: 'Name',
+          placeholder: 'Search rules...',
+          variant: 'text',
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Name" />
+        ),
+      },
+      {
+        id: 'trigger',
+        accessorKey: 'trigger',
+        enableColumnFilter: true,
+        meta: {
+          label: 'Trigger',
+          variant: 'select',
+          options: TRIGGER_OPTIONS,
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Trigger" />
+        ),
+      },
+      {
+        id: 'channel',
+        accessorKey: 'channel',
+        enableColumnFilter: true,
+        meta: {
+          label: 'Channel',
+          variant: 'select',
+          options: CHANNEL_OPTIONS,
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Channel" />
+        ),
+      },
+      {
+        id: 'target',
+        accessorKey: 'target',
+        meta: { label: 'Target' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Target" />
+        ),
+        cell: ({ row }) => (
+          <span className="max-w-xs truncate font-mono text-xs">
+            {row.original.channel === 'telegram'
+              ? maskTelegramTarget(row.original.target)
+              : row.original.target}
+          </span>
+        ),
+      },
+      {
+        id: 'project_id',
+        accessorKey: 'project_id',
+        enableColumnFilter: true,
+        enableHiding: true,
+        meta: {
+          label: 'Project',
+          variant: 'select',
+          options: projectOptions,
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Project" />
+        ),
+        filterFn: (row, _id, value) => {
+          const selected = Array.isArray(value)
+            ? value.map(String)
+            : [String(value)]
+          return selected.includes(String(row.original.project_id))
+        },
+      },
+      {
+        id: 'enabled',
+        accessorFn: (r) => String(r.enabled),
+        enableColumnFilter: true,
+        enableHiding: true,
+        meta: {
+          label: 'Enabled',
+          variant: 'select',
+          options: enabledOptions,
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Enabled" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">
+            {row.original.enabled ? 'Enabled' : 'Disabled'}
+          </span>
+        ),
+        filterFn: (row, _id, value) => {
+          const selected = Array.isArray(value)
+            ? value.map(String)
+            : [String(value)]
+          return selected.includes(String(row.original.enabled))
+        },
+      },
+    ],
+    [projectOptions, enabledOptions]
+  )
+
+  const rawRules = rulesQuery.data ?? []
+  const { table } = useDataTable({
+    data: rawRules,
+    columns,
+    pageCount: -1,
+    enableAdvancedFilter: false,
+    manualFiltering: false,
+    manualPagination: false,
+    manualSorting: false,
+    initialState: {
+      sorting: [{ id: 'name', desc: false }],
+      pagination: { pageIndex: 0, pageSize: 20 },
+      columnVisibility: { project_id: false, enabled: false },
+    },
+  })
+
+  const error = rulesQuery.error ? String(rulesQuery.error) : ''
 
   function onCreate(e: FormEvent) {
     e.preventDefault()
     createMutation.mutate()
   }
-
-  const projects = projectsQuery.data ?? []
-  const rules = rulesQuery.data ?? []
-  const projectItems = projects.map((p) => ({
-    label: p.name,
-    value: String(p.id),
-  }))
 
   return (
     <section className="flex flex-col gap-4">
@@ -117,138 +290,130 @@ export default function AlertsPage() {
           </p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger
-            render={<Button disabled={!projectId} />}
-          >
-            Create rule
-          </DialogTrigger>
-          <DialogContent className="sm:max-w-lg">
-            <DialogHeader>
-              <DialogTitle>Create alert rule</DialogTitle>
-              <DialogDescription>
-                Delivered via Slack, email, webhook, or Telegram for the selected
-                project.
-              </DialogDescription>
-            </DialogHeader>
-            <form onSubmit={onCreate} className="flex flex-col gap-4">
-              <FieldGroup className="grid gap-3 sm:grid-cols-2">
-                <Field>
-                  <FieldLabel>Name</FieldLabel>
-                  <Input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel>Trigger</FieldLabel>
-                  <Select
-                    items={[
-                      { label: 'New issue', value: 'new_issue' },
-                      { label: 'Regressed', value: 'regressed_issue' },
-                      { label: 'Error volume', value: 'error_volume' },
-                      { label: 'Cron missed', value: 'cron_missed' },
-                    ]}
-                    value={trigger}
-                    onValueChange={(v) => setTrigger(String(v ?? 'new_issue'))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="new_issue">New issue</SelectItem>
-                        <SelectItem value="regressed_issue">
-                          Regressed
-                        </SelectItem>
-                        <SelectItem value="error_volume">
-                          Error volume
-                        </SelectItem>
-                        <SelectItem value="cron_missed">Cron missed</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field>
-                  <FieldLabel>Channel</FieldLabel>
-                  <Select
-                    items={[
-                      { label: 'Webhook', value: 'webhook' },
-                      { label: 'Slack', value: 'slack' },
-                      { label: 'Email', value: 'email' },
-                      { label: 'Telegram', value: 'telegram' },
-                    ]}
-                    value={channel}
-                    onValueChange={(v) => setChannel(String(v ?? 'webhook'))}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        <SelectItem value="webhook">Webhook</SelectItem>
-                        <SelectItem value="slack">Slack</SelectItem>
-                        <SelectItem value="email">Email</SelectItem>
-                        <SelectItem value="telegram">Telegram</SelectItem>
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </Field>
-                {channel === 'telegram' ? (
-                  <>
-                    <Field>
-                      <FieldLabel>Bot token</FieldLabel>
-                      <Input
-                        value={botToken}
-                        onChange={(e) => setBotToken(e.target.value)}
-                        placeholder="123456:ABC-DEF..."
-                      />
-                    </Field>
-                    <Field>
-                      <FieldLabel>Chat ID</FieldLabel>
-                      <Input
-                        value={chatId}
-                        onChange={(e) => setChatId(e.target.value)}
-                        placeholder="123456789"
-                      />
-                    </Field>
-                  </>
-                ) : (
+            <DialogTrigger
+              render={<Button disabled={!createProjectId} />}
+            >
+              Create rule
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-lg">
+              <DialogHeader>
+                <DialogTitle>Create alert rule</DialogTitle>
+                <DialogDescription>
+                  Delivered via Slack, email, webhook, or Telegram for the
+                  selected project.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={onCreate} className="flex flex-col gap-4">
+                <FieldGroup className="grid gap-3 sm:grid-cols-2">
                   <Field>
-                    <FieldLabel>Target (URL / email)</FieldLabel>
+                    <FieldLabel>Name</FieldLabel>
                     <Input
-                      value={target}
-                      onChange={(e) => setTarget(e.target.value)}
-                      placeholder="https://hooks.slack.com/... or you@example.com"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
                     />
                   </Field>
+                  <Field>
+                    <FieldLabel>Trigger</FieldLabel>
+                    <Select
+                      items={TRIGGER_OPTIONS}
+                      value={trigger}
+                      onValueChange={(v) =>
+                        setTrigger(String(v ?? 'new_issue'))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {TRIGGER_OPTIONS.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field>
+                    <FieldLabel>Channel</FieldLabel>
+                    <Select
+                      items={CHANNEL_OPTIONS}
+                      value={channel}
+                      onValueChange={(v) =>
+                        setChannel(String(v ?? 'webhook'))
+                      }
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {CHANNEL_OPTIONS.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  {channel === 'telegram' ? (
+                    <>
+                      <Field>
+                        <FieldLabel>Bot token</FieldLabel>
+                        <Input
+                          value={botToken}
+                          onChange={(e) => setBotToken(e.target.value)}
+                          placeholder="123456:ABC-DEF..."
+                        />
+                      </Field>
+                      <Field>
+                        <FieldLabel>Chat ID</FieldLabel>
+                        <Input
+                          value={chatId}
+                          onChange={(e) => setChatId(e.target.value)}
+                          placeholder="123456789"
+                        />
+                      </Field>
+                    </>
+                  ) : (
+                    <Field>
+                      <FieldLabel>Target (URL / email)</FieldLabel>
+                      <Input
+                        value={target}
+                        onChange={(e) => setTarget(e.target.value)}
+                        placeholder="https://hooks.slack.com/... or you@example.com"
+                      />
+                    </Field>
+                  )}
+                  <Field>
+                    <FieldLabel>Volume threshold</FieldLabel>
+                    <Input
+                      value={threshold}
+                      onChange={(e) => setThreshold(e.target.value)}
+                      placeholder="10"
+                    />
+                  </Field>
+                </FieldGroup>
+                {formError && (
+                  <Alert variant="destructive">
+                    <AlertCircleIcon />
+                    <AlertTitle>Create failed</AlertTitle>
+                    <AlertDescription>{formError}</AlertDescription>
+                  </Alert>
                 )}
-                <Field>
-                  <FieldLabel>Volume threshold</FieldLabel>
-                  <Input
-                    value={threshold}
-                    onChange={(e) => setThreshold(e.target.value)}
-                    placeholder="10"
-                  />
-                </Field>
-              </FieldGroup>
-              {formError && (
-                <Alert variant="destructive">
-                  <AlertCircleIcon />
-                  <AlertTitle>Create failed</AlertTitle>
-                  <AlertDescription>{formError}</AlertDescription>
-                </Alert>
-              )}
-              <DialogFooter>
-                <Button
-                  type="submit"
-                  disabled={createMutation.isPending || !projectId}
-                >
-                  Create
-                </Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+                <DialogFooter>
+                  <Button
+                    type="submit"
+                    disabled={createMutation.isPending || !createProjectId}
+                  >
+                    Create
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
       </div>
 
       {error && (
@@ -259,67 +424,13 @@ export default function AlertsPage() {
         </Alert>
       )}
 
-      <FieldGroup className="grid gap-3 sm:grid-cols-[1fr_auto]">
-        <Field>
-          <FieldLabel>Project</FieldLabel>
-          <Select
-            items={projectItems}
-            value={projectId || undefined}
-            onValueChange={(v) => setProjectId(v == null ? '' : String(v))}
-          >
-            <SelectTrigger>
-              <SelectValue placeholder="Select project" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {projectItems.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
-      </FieldGroup>
-
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead>Trigger</TableHead>
-            <TableHead>Channel</TableHead>
-            <TableHead>Target</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rules.map((r) => (
-            <TableRow key={r.id}>
-              <TableCell>{r.name}</TableCell>
-              <TableCell>{r.trigger}</TableCell>
-              <TableCell>{r.channel}</TableCell>
-              <TableCell className="max-w-xs truncate font-mono text-xs">
-                {r.channel === 'telegram'
-                  ? maskTelegramTarget(r.target)
-                  : r.target}
-              </TableCell>
-            </TableRow>
-          ))}
-          {rules.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={4} className="text-muted-foreground">
-                No alert rules yet.
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+      {rulesQuery.isLoading || projectsQuery.isLoading ? (
+        <Skeleton className="h-48 w-full" />
+      ) : (
+        <DataTable table={table}>
+          <ListDataTableFilters table={table} />
+        </DataTable>
+      )}
     </section>
   )
-}
-
-function maskTelegramTarget(target: string) {
-  const i = target.indexOf('|')
-  if (i <= 0) return '••••'
-  return `${target.slice(0, 6)}…|${target.slice(i + 1)}`
 }

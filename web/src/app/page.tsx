@@ -1,8 +1,12 @@
-import { useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircleIcon, FolderIcon } from 'lucide-react'
-import { api, formatTime } from '@/api'
+import type { ColumnDef } from '@tanstack/react-table'
+import { AlertCircleIcon } from 'lucide-react'
+import { api, formatTime, type Project } from '@/api'
+import { DataTable } from '@/components/data-table/data-table'
+import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
+import { ListDataTableFilters } from '@/components/list-data-table-filters'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -14,24 +18,10 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from '@/components/ui/empty'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { useDataTable } from '@/hooks/use-data-table'
 
 function slugify(name: string) {
   return name
@@ -81,7 +71,86 @@ export default function HomePage() {
     createMutation.mutate()
   }
 
-  const projects = projectsQuery.data ?? []
+  const columns = useMemo<ColumnDef<Project>[]>(
+    () => [
+      {
+        id: 'name',
+        accessorKey: 'name',
+        enableColumnFilter: true,
+        meta: {
+          label: 'Name',
+          placeholder: 'Search projects...',
+          variant: 'text',
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Name" />
+        ),
+        cell: ({ row }) => (
+          <Link
+            to={`/issues?project_id=${row.original.id}`}
+            className="font-medium text-primary underline underline-offset-4"
+          >
+            {row.original.name}
+          </Link>
+        ),
+      },
+      {
+        id: 'slug',
+        accessorKey: 'slug',
+        enableColumnFilter: true,
+        meta: {
+          label: 'Slug',
+          placeholder: 'Search slugs...',
+          variant: 'text',
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Slug" />
+        ),
+        cell: ({ row }) => (
+          <span className="font-mono text-muted-foreground">
+            {row.original.slug}
+          </span>
+        ),
+      },
+      {
+        id: 'issue_count',
+        accessorKey: 'issue_count',
+        meta: { label: 'Issues' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Issues" />
+        ),
+      },
+      {
+        id: 'latest_activity_at',
+        accessorKey: 'latest_activity_at',
+        meta: { label: 'Latest activity' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Latest activity" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">
+            {formatTime(row.original.latest_activity_at)}
+          </span>
+        ),
+      },
+    ],
+    []
+  )
+
+  const { table } = useDataTable({
+    data: projectsQuery.data ?? [],
+    columns,
+    pageCount: -1,
+    enableAdvancedFilter: false,
+    manualFiltering: false,
+    manualPagination: false,
+    manualSorting: false,
+    initialState: {
+      sorting: [{ id: 'latest_activity_at', desc: true }],
+      pagination: { pageIndex: 0, pageSize: 20 },
+    },
+  })
+
   const error = projectsQuery.error ? String(projectsQuery.error) : ''
 
   if (error) {
@@ -180,52 +249,10 @@ export default function HomePage() {
 
       {projectsQuery.isLoading ? (
         <Skeleton className="h-40 w-full" />
-      ) : projects.length === 0 ? (
-        <Empty className="border border-dashed">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <FolderIcon />
-            </EmptyMedia>
-            <EmptyTitle>No projects yet</EmptyTitle>
-            <EmptyDescription>
-              Create a project, then point your SDK at the DSN.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
       ) : (
-        <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Slug</TableHead>
-                <TableHead>Issues</TableHead>
-                <TableHead>Latest activity</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {projects.map((p) => (
-                <TableRow key={p.id}>
-                  <TableCell>
-                    <Link
-                      to={`/issues?project_id=${p.id}`}
-                      className="font-medium text-primary underline-offset-4 hover:underline"
-                    >
-                      {p.name}
-                    </Link>
-                  </TableCell>
-                  <TableCell className="font-mono text-muted-foreground">
-                    {p.slug}
-                  </TableCell>
-                  <TableCell>{p.issue_count}</TableCell>
-                  <TableCell className="text-muted-foreground">
-                    {formatTime(p.latest_activity_at)}
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <DataTable table={table}>
+          <ListDataTableFilters table={table} />
+        </DataTable>
       )}
     </section>
   )

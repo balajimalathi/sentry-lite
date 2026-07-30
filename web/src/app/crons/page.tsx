@@ -1,6 +1,12 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useMemo, useState, type FormEvent } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
 import { AlertCircleIcon } from 'lucide-react'
-import { api, formatTime, type CronMonitor, type Project } from '@/api'
+import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
+import { api, formatTime, type CronMonitor } from '@/api'
+import { DataTable } from '@/components/data-table/data-table'
+import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
+import { ListDataTableFilters } from '@/components/list-data-table-filters'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -15,22 +21,16 @@ import {
 } from '@/components/ui/dialog'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
+import { useDataTable } from '@/hooks/use-data-table'
+import { firstFilterValue } from '@/lib/row-filters'
+
+const BASIC_FILTER_KEYS = [
+  'project_id',
+  'name',
+  'status',
+  'environment',
+] as const
 
 function statusVariant(status: string) {
   switch (status) {
@@ -46,72 +46,282 @@ function statusVariant(status: string) {
 }
 
 export default function CronsPage() {
-  const [projects, setProjects] = useState<Project[]>([])
-  const [projectId, setProjectId] = useState('1')
-  const [monitors, setMonitors] = useState<CronMonitor[]>([])
+  const qc = useQueryClient()
+  const [basicFilterValues] = useQueryStates({
+    project_id: parseAsArrayOf(parseAsString, ','),
+    name: parseAsString,
+    status: parseAsArrayOf(parseAsString, ','),
+    environment: parseAsArrayOf(parseAsString, ','),
+  })
+
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [scheduleSec, setScheduleSec] = useState('60')
   const [graceSec, setGraceSec] = useState('30')
-  const [error, setError] = useState('')
   const [formError, setFormError] = useState('')
 
-  async function load() {
-    setMonitors(await api.crons(projectId))
-  }
+  const basicColumnFilters = useMemo<ColumnFiltersState>(() => {
+    const filters: ColumnFiltersState = []
+    for (const key of BASIC_FILTER_KEYS) {
+      const value = basicFilterValues[key]
+      if (value == null || value === '') continue
+      filters.push({ id: key, value })
+    }
+    return filters
+  }, [basicFilterValues])
 
-  useEffect(() => {
-    api.projects().then((p) => {
-      setProjects(p)
-      if (p.length && !p.find((x) => String(x.id) === projectId)) {
-        setProjectId(String(p[0].id))
-      }
-    })
-  }, [])
+  const projectsQuery = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => api.projects(),
+  })
 
-  useEffect(() => {
-    if (!projectId) return
-    load().catch((e) => setError(String(e)))
-  }, [projectId])
+  const projects = projectsQuery.data ?? []
+  const projectOptions = useMemo(
+    () => projects.map((p) => ({ label: p.name, value: String(p.id) })),
+    [projects]
+  )
 
-  async function onCreate(e: FormEvent) {
-    e.preventDefault()
-    if (!name.trim()) return
-    try {
-      await api.createCron({
+  const selectedProjectId = firstFilterValue(
+    basicColumnFilters.find((f) => f.id === 'project_id')?.value
+  )
+
+  const projectId =
+    selectedProjectId || (projects[0] ? String(projects[0].id) : '')
+
+  const cronsQuery = useQuery({
+    queryKey: ['crons', projectId],
+    queryFn: () => api.crons(projectId),
+    enabled: !!projectId,
+  })
+
+  const createMutation = useMutation({
+    mutationFn: () =>
+      api.createCron({
         project_id: Number(projectId),
         name: name.trim(),
         schedule_sec: Number(scheduleSec) || 60,
         grace_sec: Number(graceSec) || 30,
-      })
+      }),
+    onSuccess: () => {
       setName('')
       setFormError('')
-      setError('')
       setOpen(false)
-      await load()
-    } catch (err) {
-      setFormError(String(err))
-    }
-  }
+      void qc.invalidateQueries({ queryKey: ['crons', projectId] })
+    },
+    onError: (err) => setFormError(String(err)),
+  })
 
-  async function onDelete(id: number) {
-    try {
-      await api.deleteCron(id)
-      await load()
-    } catch (err) {
-      setError(String(err))
-    }
-  }
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => api.deleteCron(id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['crons', projectId] })
+    },
+  })
 
-  const projectItems = projects.map((p) => ({
-    label: p.name,
-    value: String(p.id),
-  }))
+  const rawMonitors = cronsQuery.data ?? []
+
+  const envOptions = useMemo(() => {
+    const values = new Set<string>()
+    for (const m of rawMonitors) {
+      if (m.environment) values.add(m.environment)
+    }
+    return [...values].map((v) => ({ label: v, value: v }))
+  }, [rawMonitors])
+
+  const statusOptions = useMemo(
+    () =>
+      ['ok', 'late', 'missed'].map((v) => ({
+        label: v,
+        value: v,
+      })),
+    []
+  )
 
   const publicBase =
     typeof window !== 'undefined'
       ? window.location.origin.replace(':5173', ':8080')
       : ''
+
+  const columns = useMemo<ColumnDef<CronMonitor>[]>(
+    () => [
+      {
+        id: 'name',
+        accessorKey: 'name',
+        enableColumnFilter: true,
+        meta: {
+          label: 'Name',
+          placeholder: 'Search monitors...',
+          variant: 'text',
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Name" />
+        ),
+        cell: ({ row }) => (
+          <div>
+            <div className="font-medium">{row.original.name}</div>
+            <div className="font-mono text-xs text-muted-foreground">
+              {row.original.slug}
+            </div>
+          </div>
+        ),
+      },
+      {
+        id: 'status',
+        accessorKey: 'status',
+        enableColumnFilter: true,
+        meta: {
+          label: 'Status',
+          variant: 'select',
+          options: statusOptions,
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Status" />
+        ),
+        cell: ({ row }) => (
+          <Badge variant={statusVariant(row.original.status)}>
+            {row.original.status}
+          </Badge>
+        ),
+      },
+      {
+        id: 'project_id',
+        accessorKey: 'project_id',
+        enableColumnFilter: true,
+        enableHiding: true,
+        meta: {
+          label: 'Project',
+          variant: 'select',
+          options: projectOptions,
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Project" />
+        ),
+        filterFn: (row, _id, value) => {
+          const selected = Array.isArray(value)
+            ? value.map(String)
+            : [String(value)]
+          return selected.includes(String(row.original.project_id))
+        },
+      },
+      {
+        id: 'environment',
+        accessorFn: (r) => r.environment ?? '',
+        enableColumnFilter: true,
+        enableHiding: true,
+        meta: {
+          label: 'Environment',
+          variant: 'select',
+          options: envOptions,
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Environment" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">
+            {row.original.environment || '—'}
+          </span>
+        ),
+      },
+      {
+        id: 'last_checkin_at',
+        accessorKey: 'last_checkin_at',
+        meta: { label: 'Last check-in' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Last check-in" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">
+            {formatTime(row.original.last_checkin_at)}
+          </span>
+        ),
+      },
+      {
+        id: 'next_expected_at',
+        accessorKey: 'next_expected_at',
+        meta: { label: 'Next expected' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Next expected" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">
+            {formatTime(row.original.next_expected_at)}
+          </span>
+        ),
+      },
+      {
+        id: 'schedule',
+        accessorFn: (r) => r.schedule_sec,
+        enableSorting: false,
+        meta: { label: 'Schedule' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Schedule" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-sm">
+            every {row.original.schedule_sec}s (+{row.original.grace_sec}s)
+          </span>
+        ),
+      },
+      {
+        id: 'checkin_url',
+        accessorFn: (r) => r.token,
+        enableSorting: false,
+        meta: { label: 'Check-in URL' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Check-in URL" />
+        ),
+        cell: ({ row }) => (
+          <span className="max-w-xs truncate font-mono text-xs">
+            {`POST ${publicBase}/api/cron/check-in/${row.original.token}`}
+          </span>
+        ),
+      },
+      {
+        id: 'actions',
+        enableSorting: false,
+        enableHiding: false,
+        header: () => null,
+        cell: ({ row }) => (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => deleteMutation.mutate(row.original.id)}
+          >
+            Delete
+          </Button>
+        ),
+      },
+    ],
+    [statusOptions, projectOptions, envOptions, publicBase, deleteMutation]
+  )
+
+  const { table } = useDataTable({
+    data: rawMonitors,
+    columns,
+    pageCount: -1,
+    enableAdvancedFilter: false,
+    manualFiltering: false,
+    manualPagination: false,
+    manualSorting: false,
+    initialState: {
+      sorting: [{ id: 'name', desc: false }],
+      pagination: { pageIndex: 0, pageSize: 20 },
+      columnVisibility: { project_id: false, environment: false },
+    },
+  })
+
+  const error = cronsQuery.error
+    ? String(cronsQuery.error)
+    : deleteMutation.error
+      ? String(deleteMutation.error)
+      : ''
+
+  function onCreate(e: FormEvent) {
+    e.preventDefault()
+    if (!name.trim() || !projectId) return
+    createMutation.mutate()
+  }
 
   return (
     <section className="flex flex-col gap-4">
@@ -126,55 +336,63 @@ export default function CronsPage() {
           </p>
         </div>
         <Dialog open={open} onOpenChange={setOpen}>
-          <DialogTrigger render={<Button />}>Create monitor</DialogTrigger>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Create monitor</DialogTitle>
-              <DialogDescription>
-                Expected frequency and grace period for project check-ins.
-              </DialogDescription>
-            </DialogHeader>
-            <form onSubmit={onCreate} className="flex flex-col gap-4">
-              <FieldGroup className="grid gap-3">
-                <Field>
-                  <FieldLabel htmlFor="cron-name">Name</FieldLabel>
-                  <Input
-                    id="cron-name"
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="nightly-backup"
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="schedule">Expected every (sec)</FieldLabel>
-                  <Input
-                    id="schedule"
-                    value={scheduleSec}
-                    onChange={(e) => setScheduleSec(e.target.value)}
-                  />
-                </Field>
-                <Field>
-                  <FieldLabel htmlFor="grace">Grace (sec)</FieldLabel>
-                  <Input
-                    id="grace"
-                    value={graceSec}
-                    onChange={(e) => setGraceSec(e.target.value)}
-                  />
-                </Field>
-              </FieldGroup>
-              {formError && (
-                <Alert variant="destructive">
-                  <AlertCircleIcon />
-                  <AlertTitle>Create failed</AlertTitle>
-                  <AlertDescription>{formError}</AlertDescription>
-                </Alert>
-              )}
-              <DialogFooter>
-                <Button type="submit">Create</Button>
-              </DialogFooter>
-            </form>
-          </DialogContent>
-        </Dialog>
+            <DialogTrigger
+              render={<Button disabled={!projectId} />}
+            >
+              Create monitor
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Create monitor</DialogTitle>
+                <DialogDescription>
+                  Expected frequency and grace period for project check-ins.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={onCreate} className="flex flex-col gap-4">
+                <FieldGroup className="grid gap-3">
+                  <Field>
+                    <FieldLabel htmlFor="cron-name">Name</FieldLabel>
+                    <Input
+                      id="cron-name"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="nightly-backup"
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="schedule">
+                      Expected every (sec)
+                    </FieldLabel>
+                    <Input
+                      id="schedule"
+                      value={scheduleSec}
+                      onChange={(e) => setScheduleSec(e.target.value)}
+                    />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="grace">Grace (sec)</FieldLabel>
+                    <Input
+                      id="grace"
+                      value={graceSec}
+                      onChange={(e) => setGraceSec(e.target.value)}
+                    />
+                  </Field>
+                </FieldGroup>
+                {formError && (
+                  <Alert variant="destructive">
+                    <AlertCircleIcon />
+                    <AlertTitle>Create failed</AlertTitle>
+                    <AlertDescription>{formError}</AlertDescription>
+                  </Alert>
+                )}
+                <DialogFooter>
+                  <Button type="submit" disabled={createMutation.isPending}>
+                    Create
+                  </Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
       </div>
 
       {error && (
@@ -185,87 +403,13 @@ export default function CronsPage() {
         </Alert>
       )}
 
-      <FieldGroup className="grid gap-3 sm:grid-cols-[1fr_auto]">
-        <Field>
-          <FieldLabel>Project</FieldLabel>
-          <Select
-            items={projectItems}
-            value={projectId}
-            onValueChange={(v) => setProjectId(v == null ? '1' : String(v))}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {projectItems.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
-      </FieldGroup>
-
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Name</TableHead>
-            <TableHead>Status</TableHead>
-            <TableHead>Last check-in</TableHead>
-            <TableHead>Next expected</TableHead>
-            <TableHead>Schedule</TableHead>
-            <TableHead>Check-in URL</TableHead>
-            <TableHead />
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {monitors.map((m) => (
-            <TableRow key={m.id}>
-              <TableCell>
-                <div className="font-medium">{m.name}</div>
-                <div className="font-mono text-xs text-muted-foreground">
-                  {m.slug}
-                </div>
-              </TableCell>
-              <TableCell>
-                <Badge variant={statusVariant(m.status)}>{m.status}</Badge>
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                {formatTime(m.last_checkin_at)}
-              </TableCell>
-              <TableCell className="text-muted-foreground">
-                {formatTime(m.next_expected_at)}
-              </TableCell>
-              <TableCell className="text-sm">
-                every {m.schedule_sec}s (+{m.grace_sec}s)
-              </TableCell>
-              <TableCell className="max-w-xs truncate font-mono text-xs">
-                {`POST ${publicBase}/api/cron/check-in/${m.token}`}
-              </TableCell>
-              <TableCell>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() => onDelete(m.id)}
-                >
-                  Delete
-                </Button>
-              </TableCell>
-            </TableRow>
-          ))}
-          {monitors.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={7} className="text-muted-foreground">
-                No cron monitors yet.
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
+      {cronsQuery.isLoading || projectsQuery.isLoading ? (
+        <Skeleton className="h-48 w-full" />
+      ) : (
+        <DataTable table={table}>
+          <ListDataTableFilters table={table} />
+        </DataTable>
+      )}
     </section>
   )
 }

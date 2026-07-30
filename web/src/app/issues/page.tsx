@@ -3,35 +3,25 @@ import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
 import { AlertCircleIcon } from 'lucide-react'
-import {
-  parseAsArrayOf,
-  parseAsString,
-  parseAsStringEnum,
-  useQueryState,
-  useQueryStates,
-} from 'nuqs'
+import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
 import { api, formatTime, type Issue } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
-import { DataTableAdvancedToolbar } from '@/components/data-table/data-table-advanced-toolbar'
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
-import { DataTableFilterList } from '@/components/data-table/data-table-filter-list'
-import { DataTableFilterMenu } from '@/components/data-table/data-table-filter-menu'
-import { DataTableSortList } from '@/components/data-table/data-table-sort-list'
-import { DataTableToolbar } from '@/components/data-table/data-table-toolbar'
+import { ListDataTableFilters } from '@/components/list-data-table-filters'
+import { ListFilterModeToggle } from '@/components/list-filter-mode-toggle'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
-import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useDataTable } from '@/hooks/use-data-table'
+import {
+  clearBasicFilterRecord,
+  useListFilterMode,
+} from '@/hooks/use-list-filter-mode'
 import {
   applyAdvancedIssueFilters,
   columnFiltersToIssueParams,
 } from '@/lib/issue-filters'
-import { getFiltersStateParser } from '@/lib/parsers'
 import { statusVariant } from '@/lib/status'
-import type { ExtendedColumnFilter, JoinOperator } from '@/types/data-table'
-
-type FilterMode = 'basic' | 'advanced' | 'command'
 
 const BASIC_FILTER_KEYS = [
   'title',
@@ -44,21 +34,14 @@ const BASIC_FILTER_KEYS = [
 ] as const
 
 export default function IssuesPage() {
-  const [filterMode, setFilterMode] = useQueryState(
-    'filterMode',
-    parseAsStringEnum<FilterMode>(['basic', 'advanced', 'command']).withDefault(
-      'basic'
-    )
-  )
-
-  const [advancedFilters, setAdvancedFilters] = useQueryState(
-    'filters',
-    getFiltersStateParser<Issue>().withDefault([])
-  )
-  const [joinOperator, setJoinOperator] = useQueryState(
-    'joinOperator',
-    parseAsStringEnum<JoinOperator>(['and', 'or']).withDefault('and')
-  )
+  const {
+    filterMode,
+    setFilterMode,
+    advancedFilters,
+    joinOperator,
+    enableAdvancedFilter,
+    clearAdvancedFilters,
+  } = useListFilterMode<Issue>()
 
   const [basicFilterValues, setBasicFilterValues] = useQueryStates({
     title: parseAsString,
@@ -98,7 +81,7 @@ export default function IssuesPage() {
       columnFiltersToIssueParams({
         mode: filterMode,
         columnFilters: basicColumnFilters,
-        advancedFilters: advancedFilters as ExtendedColumnFilter<Issue>[],
+        advancedFilters,
       }),
     [filterMode, basicColumnFilters, advancedFilters]
   )
@@ -363,14 +346,8 @@ export default function IssuesPage() {
   const rawIssues = issuesQuery.data ?? []
   const issues = useMemo(() => {
     if (filterMode === 'basic') return rawIssues
-    return applyAdvancedIssueFilters(
-      rawIssues,
-      advancedFilters as ExtendedColumnFilter<Issue>[],
-      joinOperator
-    )
+    return applyAdvancedIssueFilters(rawIssues, advancedFilters, joinOperator)
   }, [filterMode, rawIssues, advancedFilters, joinOperator])
-
-  const enableAdvancedFilter = filterMode !== 'basic'
 
   const { table } = useDataTable({
     data: issues,
@@ -415,52 +392,22 @@ export default function IssuesPage() {
             Filter with toolbar chips, advanced rules, or a command menu.
           </p>
         </div>
-        <ToggleGroup
-          value={[filterMode]}
-          onValueChange={(value) => {
-            const next = value[0] as FilterMode | undefined
-            if (!next || next === filterMode) return
-            void setFilterMode(next)
-            void setAdvancedFilters([])
-            void setJoinOperator('and')
-            void setBasicFilterValues({
-              title: null,
-              status: null,
-              project_id: null,
-              environment: null,
-              release: null,
-              tag: null,
-              last_seen: null,
-            })
-            table.resetColumnFilters()
-          }}
-          variant="outline"
-          size="sm"
-        >
-          <ToggleGroupItem value="basic">Filters</ToggleGroupItem>
-          <ToggleGroupItem value="advanced">Advanced filters</ToggleGroupItem>
-          <ToggleGroupItem value="command">Command filters</ToggleGroupItem>
-        </ToggleGroup>
+        <ListFilterModeToggle
+          filterMode={filterMode}
+          setFilterMode={setFilterMode}
+          clearAdvanced={clearAdvancedFilters}
+          clearBasic={() =>
+            void setBasicFilterValues(clearBasicFilterRecord(BASIC_FILTER_KEYS))
+          }
+          table={table}
+        />
       </div>
 
       {issuesQuery.isLoading ? (
         <Skeleton className="h-48 w-full" />
       ) : (
         <DataTable table={table}>
-          {filterMode === 'basic' ? (
-            <DataTableToolbar table={table}>
-              <DataTableSortList table={table} />
-            </DataTableToolbar>
-          ) : (
-            <DataTableAdvancedToolbar table={table}>
-              {filterMode === 'advanced' ? (
-                <DataTableFilterList table={table} />
-              ) : (
-                <DataTableFilterMenu table={table} />
-              )}
-              <DataTableSortList table={table} />
-            </DataTableAdvancedToolbar>
-          )}
+          <ListDataTableFilters table={table} filterMode={filterMode} />
         </DataTable>
       )}
     </section>

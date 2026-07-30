@@ -1,25 +1,17 @@
-import { useEffect, useState } from 'react'
+import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
 import { AlertCircleIcon } from 'lucide-react'
-import { api, type Project, type TransactionSummary } from '@/api'
+import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
+import { api, type TransactionSummary } from '@/api'
+import { DataTable } from '@/components/data-table/data-table'
+import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
+import { ListDataTableFilters } from '@/components/list-data-table-filters'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
+import { useDataTable } from '@/hooks/use-data-table'
+import { firstFilterValue } from '@/lib/row-filters'
 
 function fmtMs(n: number) {
   if (!Number.isFinite(n)) return '—'
@@ -29,108 +21,166 @@ function fmtMs(n: number) {
 }
 
 export default function PerformancePage() {
-  const [projects, setProjects] = useState<Project[]>([])
-  const [projectId, setProjectId] = useState('1')
-  const [rows, setRows] = useState<TransactionSummary[]>([])
-  const [error, setError] = useState('')
+  const [basicFilterValues] = useQueryStates({
+    project_id: parseAsArrayOf(parseAsString, ','),
+    name: parseAsString,
+  })
 
-  useEffect(() => {
-    api.projects().then((p) => {
-      setProjects(p)
-      if (p.length && !p.find((x) => String(x.id) === projectId)) {
-        setProjectId(String(p[0].id))
-      }
-    })
-  }, [])
+  const basicColumnFilters = useMemo<ColumnFiltersState>(() => {
+    const filters: ColumnFiltersState = []
+    for (const key of ['project_id', 'name'] as const) {
+      const value = basicFilterValues[key]
+      if (value == null || value === '') continue
+      filters.push({ id: key, value })
+    }
+    return filters
+  }, [basicFilterValues])
 
-  useEffect(() => {
-    if (!projectId) return
-    api
-      .transactions(projectId)
-      .then(setRows)
-      .catch((e) => setError(String(e)))
-  }, [projectId])
+  const projectsQuery = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => api.projects(),
+  })
 
-  const projectItems = projects.map((p) => ({
-    label: p.name,
-    value: String(p.id),
-  }))
+  const projects = projectsQuery.data ?? []
+  const projectOptions = useMemo(
+    () => projects.map((p) => ({ label: p.name, value: String(p.id) })),
+    [projects]
+  )
+
+  const selectedProjectId = firstFilterValue(
+    basicColumnFilters.find((f) => f.id === 'project_id')?.value
+  )
+  const projectId =
+    selectedProjectId || (projects[0] ? String(projects[0].id) : '')
+
+  const transactionsQuery = useQuery({
+    queryKey: ['transactions', projectId],
+    queryFn: () => api.transactions(projectId),
+    enabled: !!projectId,
+  })
+
+  const columns = useMemo<ColumnDef<TransactionSummary>[]>(
+    () => [
+      {
+        id: 'name',
+        accessorKey: 'name',
+        enableColumnFilter: true,
+        meta: {
+          label: 'Transaction',
+          placeholder: 'Search transactions...',
+          variant: 'text',
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Transaction" />
+        ),
+        cell: ({ row }) => (
+          <Link
+            to={`/performance/${encodeURIComponent(row.original.name)}?project_id=${projectId}`}
+            className="font-mono text-sm underline-offset-4 hover:underline"
+          >
+            {row.original.name}
+          </Link>
+        ),
+      },
+      {
+        id: 'project_id',
+        accessorKey: 'project_id',
+        enableColumnFilter: true,
+        enableHiding: true,
+        meta: {
+          label: 'Project',
+          variant: 'select',
+          options: projectOptions,
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Project" />
+        ),
+        filterFn: (row, _id, value) => {
+          const selected = Array.isArray(value)
+            ? value.map(String)
+            : [String(value)]
+          return selected.includes(String(row.original.project_id))
+        },
+      },
+      {
+        id: 'count',
+        accessorKey: 'count',
+        meta: { label: 'Count' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Count" />
+        ),
+      },
+      {
+        id: 'p95_ms',
+        accessorKey: 'p95_ms',
+        meta: { label: 'p95' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="p95" />
+        ),
+        cell: ({ row }) => fmtMs(row.original.p95_ms),
+      },
+      {
+        id: 'p99_ms',
+        accessorKey: 'p99_ms',
+        meta: { label: 'p99' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="p99" />
+        ),
+        cell: ({ row }) => fmtMs(row.original.p99_ms),
+      },
+    ],
+    [projectOptions, projectId]
+  )
+
+  const { table } = useDataTable({
+    data: transactionsQuery.data ?? [],
+    columns,
+    pageCount: -1,
+    enableAdvancedFilter: false,
+    manualFiltering: false,
+    manualPagination: false,
+    manualSorting: false,
+    initialState: {
+      sorting: [{ id: 'p95_ms', desc: true }],
+      pagination: { pageIndex: 0, pageSize: 20 },
+      columnVisibility: { project_id: false },
+    },
+  })
+
+  const error = transactionsQuery.error
+    ? String(transactionsQuery.error)
+    : projectsQuery.error
+      ? String(projectsQuery.error)
+      : ''
+
+  if (error) {
+    return (
+      <Alert variant="destructive">
+        <AlertCircleIcon />
+        <AlertTitle>Failed to load performance</AlertTitle>
+        <AlertDescription>{error}</AlertDescription>
+      </Alert>
+    )
+  }
 
   return (
     <section className="flex flex-col gap-4">
-      <h1 className="font-heading text-2xl font-medium tracking-tight">
-        Performance
-      </h1>
-      <p className="text-sm text-muted-foreground">
-        Transaction latency over the last 24 hours (p95 / p99).
-      </p>
-      {error && (
-        <Alert variant="destructive">
-          <AlertCircleIcon />
-          <AlertTitle>Error</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
+      <div className="flex flex-col gap-1">
+        <h1 className="font-heading text-2xl font-medium tracking-tight">
+          Performance
+        </h1>
+        <p className="text-sm text-muted-foreground">
+          Transaction latency over the last 24 hours (p95 / p99).
+        </p>
+      </div>
+
+      {transactionsQuery.isLoading || projectsQuery.isLoading ? (
+        <Skeleton className="h-48 w-full" />
+      ) : (
+        <DataTable table={table}>
+          <ListDataTableFilters table={table} />
+        </DataTable>
       )}
-
-      <FieldGroup className="grid gap-3 sm:grid-cols-[1fr_auto]">
-        <Field>
-          <FieldLabel>Project</FieldLabel>
-          <Select
-            items={projectItems}
-            value={projectId}
-            onValueChange={(v) => setProjectId(v == null ? '1' : String(v))}
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {projectItems.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
-      </FieldGroup>
-
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>Transaction</TableHead>
-            <TableHead>Count</TableHead>
-            <TableHead>p95</TableHead>
-            <TableHead>p99</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {rows.map((r) => (
-            <TableRow key={r.name}>
-              <TableCell>
-                <Link
-                  to={`/performance/${encodeURIComponent(r.name)}?project_id=${projectId}`}
-                  className="font-mono text-sm underline-offset-4 hover:underline"
-                >
-                  {r.name}
-                </Link>
-              </TableCell>
-              <TableCell>{r.count}</TableCell>
-              <TableCell>{fmtMs(r.p95_ms)}</TableCell>
-              <TableCell>{fmtMs(r.p99_ms)}</TableCell>
-            </TableRow>
-          ))}
-          {rows.length === 0 && (
-            <TableRow>
-              <TableCell colSpan={4} className="text-muted-foreground">
-                No transactions yet. Enable traces in your Sentry SDK
-                (tracesSampleRate &gt; 0).
-              </TableCell>
-            </TableRow>
-          )}
-        </TableBody>
-      </Table>
     </section>
   )
 }
