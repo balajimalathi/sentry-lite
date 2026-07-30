@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
-import { AlertCircleIcon, SearchIcon } from 'lucide-react'
+import { AlertCircleIcon } from 'lucide-react'
 import {
   parseAsArrayOf,
   parseAsString,
@@ -20,13 +20,6 @@ import { DataTableSortList } from '@/components/data-table/data-table-sort-list'
 import { DataTableToolbar } from '@/components/data-table/data-table-toolbar'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useDataTable } from '@/hooks/use-data-table'
@@ -58,16 +51,16 @@ export default function IssuesPage() {
     )
   )
 
-  const [advancedFilters] = useQueryState(
+  const [advancedFilters, setAdvancedFilters] = useQueryState(
     'filters',
     getFiltersStateParser<Issue>().withDefault([])
   )
-  const [joinOperator] = useQueryState(
+  const [joinOperator, setJoinOperator] = useQueryState(
     'joinOperator',
     parseAsStringEnum<JoinOperator>(['and', 'or']).withDefault('and')
   )
 
-  const [basicFilterValues] = useQueryStates({
+  const [basicFilterValues, setBasicFilterValues] = useQueryStates({
     title: parseAsString,
     status: parseAsArrayOf(parseAsString, ','),
     project_id: parseAsArrayOf(parseAsString, ','),
@@ -426,7 +419,20 @@ export default function IssuesPage() {
           value={[filterMode]}
           onValueChange={(value) => {
             const next = value[0] as FilterMode | undefined
-            if (next) void setFilterMode(next)
+            if (!next || next === filterMode) return
+            void setFilterMode(next)
+            void setAdvancedFilters([])
+            void setJoinOperator('and')
+            void setBasicFilterValues({
+              title: null,
+              status: null,
+              project_id: null,
+              environment: null,
+              release: null,
+              tag: null,
+              last_seen: null,
+            })
+            table.resetColumnFilters()
           }}
           variant="outline"
           size="sm"
@@ -440,37 +446,22 @@ export default function IssuesPage() {
       {issuesQuery.isLoading ? (
         <Skeleton className="h-48 w-full" />
       ) : (
-        <>
-          <DataTable table={table}>
-            {filterMode === 'basic' ? (
-              <DataTableToolbar table={table}>
-                <DataTableSortList table={table} />
-              </DataTableToolbar>
-            ) : (
-              <DataTableAdvancedToolbar table={table}>
-                {filterMode === 'advanced' ? (
-                  <DataTableFilterList table={table} />
-                ) : (
-                  <DataTableFilterMenu table={table} />
-                )}
-                <DataTableSortList table={table} />
-              </DataTableAdvancedToolbar>
-            )}
-          </DataTable>
-          {issues.length === 0 && (
-            <Empty className="border border-dashed">
-              <EmptyHeader>
-                <EmptyMedia variant="icon">
-                  <SearchIcon />
-                </EmptyMedia>
-                <EmptyTitle>No issues found</EmptyTitle>
-                <EmptyDescription>
-                  No issues match these filters.
-                </EmptyDescription>
-              </EmptyHeader>
-            </Empty>
+        <DataTable table={table}>
+          {filterMode === 'basic' ? (
+            <DataTableToolbar table={table}>
+              <DataTableSortList table={table} />
+            </DataTableToolbar>
+          ) : (
+            <DataTableAdvancedToolbar table={table}>
+              {filterMode === 'advanced' ? (
+                <DataTableFilterList table={table} />
+              ) : (
+                <DataTableFilterMenu table={table} />
+              )}
+              <DataTableSortList table={table} />
+            </DataTableAdvancedToolbar>
           )}
-        </>
+        </DataTable>
       )}
     </section>
   )
