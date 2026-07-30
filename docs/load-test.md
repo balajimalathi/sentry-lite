@@ -83,7 +83,7 @@ Restart the load TUI after rebuilding to pick up the new RAM/storage cards.
 | Variable | Purpose |
 |----------|---------|
 | `SENTRY_DSN` / `NEXT_PUBLIC_SENTRY_DSN` / `LOAD_DSN` | Default DSN |
-| `CORS_ORIGINS` | Not needed (direct HTTP, not browser) |
+| _(CORS)_ | Not needed (direct HTTP, not browser) |
 
 ## Flags
 

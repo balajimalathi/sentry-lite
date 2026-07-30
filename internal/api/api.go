@@ -69,14 +69,15 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Name string `json:"name"`
-		Slug string `json:"slug"`
+		Name           string   `json:"name"`
+		Slug           string   `json:"slug"`
+		AllowedOrigins []string `json:"allowed_origins"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	created, err := h.Store.CreateProject(r.Context(), body.Name, body.Slug, h.PublicURL)
+	created, err := h.Store.CreateProject(r.Context(), body.Name, body.Slug, h.PublicURL, body.AllowedOrigins)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

@@ -4,6 +4,7 @@ export type Project = {
   id: number
   slug: string
   name: string
+  allowed_origins: string[]
   issue_count: number
   latest_activity_at: string | null
   created_at: string
@@ -191,8 +192,11 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 export const api = {
   projects: () => get<Project[]>('/api/internal/projects'),
-  createProject: (body: { name: string; slug?: string }) =>
-    post<CreatedProject>('/api/internal/projects', body),
+  createProject: (body: {
+    name: string
+    slug?: string
+    allowed_origins?: string[]
+  }) => post<CreatedProject>('/api/internal/projects', body),
   facets: (projectId?: string) =>
     get<Facets>(
       projectId

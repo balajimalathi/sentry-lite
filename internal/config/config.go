@@ -10,7 +10,6 @@ type Config struct {
 	SQLitePath      string
 	RedpandaBrokers []string
 	DataDir         string
-	CORSOrigins     []string
 	IngestTopic     string
 	WebDist         string
 	PublicURL       string
@@ -21,13 +20,11 @@ type Config struct {
 
 func Load() Config {
 	brokers := env("REDPANDA_BROKERS", "localhost:19092")
-	cors := env("CORS_ORIGINS", "http://localhost:5173,http://localhost:3000")
 	return Config{
 		HTTPAddr:        env("HTTP_ADDR", ":8080"),
 		SQLitePath:      env("SQLITE_PATH", "./data/sentry-lite.db"),
 		RedpandaBrokers: splitCSV(brokers),
 		DataDir:         env("DATA_DIR", "./data"),
-		CORSOrigins:     splitCSV(cors),
 		IngestTopic:     env("INGEST_TOPIC", "events.ingest"),
 		WebDist:         env("WEB_DIST", "./web/dist"),
 		PublicURL:       env("PUBLIC_URL", "http://localhost:8080"),

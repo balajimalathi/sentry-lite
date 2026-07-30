@@ -28,12 +28,13 @@ type ProjectKey struct {
 }
 
 type Project struct {
-	ID               int64   `json:"id"`
-	Slug             string  `json:"slug"`
-	Name             string  `json:"name"`
-	IssueCount       int64   `json:"issue_count"`
-	LatestActivityAt *string `json:"latest_activity_at"`
-	CreatedAt        string  `json:"created_at"`
+	ID               int64    `json:"id"`
+	Slug             string   `json:"slug"`
+	Name             string   `json:"name"`
+	AllowedOrigins   []string `json:"allowed_origins"`
+	IssueCount       int64    `json:"issue_count"`
+	LatestActivityAt *string  `json:"latest_activity_at"`
+	CreatedAt        string   `json:"created_at"`
 }
 
 type Issue struct {
@@ -198,7 +199,11 @@ func (s *Store) seed() error {
 		return err
 	}
 	orgID, _ := res.LastInsertId()
-	res, err = tx.Exec(`INSERT INTO projects (organization_id, slug, name) VALUES (?, ?, ?)`, orgID, "demo", "Demo Project")
+	seedOrigins := `["http://localhost:5173","http://localhost:3000","http://localhost:8080"]`
+	res, err = tx.Exec(
+		`INSERT INTO projects (organization_id, slug, name, allowed_origins) VALUES (?, ?, ?, ?)`,
+		orgID, "demo", "Demo Project", seedOrigins,
+	)
 	if err != nil {
 		return err
 	}
@@ -230,7 +235,7 @@ func (s *Store) LookupProjectKey(ctx context.Context, publicKey string, projectI
 
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	rows, err := s.DB.QueryContext(ctx, `
-		SELECT p.id, p.slug, p.name, p.created_at,
+		SELECT p.id, p.slug, p.name, p.allowed_origins, p.created_at,
 		       COALESCE((SELECT COUNT(*) FROM issues i WHERE i.project_id = p.id), 0) AS issue_count,
 		       (SELECT MAX(i.last_seen) FROM issues i WHERE i.project_id = p.id) AS latest_activity
 		FROM projects p
@@ -243,10 +248,12 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	var out []Project
 	for rows.Next() {
 		var p Project
+		var originsJSON string
 		var latest sql.NullString
-		if err := rows.Scan(&p.ID, &p.Slug, &p.Name, &p.CreatedAt, &p.IssueCount, &latest); err != nil {
+		if err := rows.Scan(&p.ID, &p.Slug, &p.Name, &originsJSON, &p.CreatedAt, &p.IssueCount, &latest); err != nil {
 			return nil, err
 		}
+		p.AllowedOrigins = decodeOriginsJSON(originsJSON)
 		if latest.Valid {
 			p.LatestActivityAt = &latest.String
 		}

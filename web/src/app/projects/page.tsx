@@ -22,9 +22,10 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Textarea } from '@/components/ui/textarea'
 import { useDataTable } from '@/hooks/use-data-table'
 
 function slugify(name: string) {
@@ -43,6 +44,7 @@ export default function ProjectsPage() {
   const [name, setName] = useState('')
   const [slug, setSlug] = useState('')
   const [slugTouched, setSlugTouched] = useState(false)
+  const [originsText, setOriginsText] = useState('')
   const [createdDsn, setCreatedDsn] = useState('')
   const [formError, setFormError] = useState('')
 
@@ -52,16 +54,23 @@ export default function ProjectsPage() {
   })
 
   const createMutation = useMutation({
-    mutationFn: () =>
-      api.createProject({
+    mutationFn: () => {
+      const allowed_origins = originsText
+        .split(/[\n,]+/)
+        .map((o) => o.trim())
+        .filter(Boolean)
+      return api.createProject({
         name: name.trim(),
         slug: slug.trim() || undefined,
-      }),
+        allowed_origins,
+      })
+    },
     onSuccess: (res) => {
       setCreatedDsn(res.dsn)
       setName('')
       setSlug('')
       setSlugTouched(false)
+      setOriginsText('')
       setFormError('')
       setOpen(false)
       void qc.invalidateQueries({ queryKey: ['projects'] })
@@ -214,6 +223,21 @@ export default function ProjectsPage() {
                       }}
                       placeholder="backend-api"
                     />
+                  </Field>
+                  <Field>
+                    <FieldLabel htmlFor="project-origins">
+                      Allowed origins
+                    </FieldLabel>
+                    <Textarea
+                      id="project-origins"
+                      value={originsText}
+                      onChange={(e) => setOriginsText(e.target.value)}
+                      placeholder={'http://localhost:3000\nhttps://app.example.com'}
+                    />
+                    <FieldDescription>
+                      Browser SDK origins (one per line). Leave empty to allow
+                      any Origin.
+                    </FieldDescription>
                   </Field>
                 </FieldGroup>
                 {formError && (

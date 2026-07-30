@@ -63,11 +63,7 @@ Skip check-ins past schedule + grace to see `late` / `missed` in the Crons UI.
 
 ## CORS
 
-Browser events POST cross-origin to `:8080`. sentry-lite defaults include `http://localhost:3000`. If you use another origin, set:
-
-```bash
-CORS_ORIGINS=http://localhost:5173,http://localhost:3000
-```
+Browser events POST cross-origin to `:8080`. Set **Allowed origins** when creating the project (one URL per line), e.g. `http://localhost:3000`. Leave empty to allow any Origin. The seeded demo project already allows localhost `5173` / `3000` / `8080`.
 
 ## Env
 

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -69,7 +70,7 @@ func main() {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(corsMiddleware(cfg.CORSOrigins))
+	r.Use(corsMiddleware(st))
 
 	r.Get("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -116,15 +117,11 @@ func normalizePort(addr string) string {
 	return ":" + addr
 }
 
-func corsMiddleware(origins []string) func(http.Handler) http.Handler {
-	allowed := map[string]bool{}
-	for _, o := range origins {
-		allowed[o] = true
-	}
+func corsMiddleware(st *store.Store) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			origin := r.Header.Get("Origin")
-			if origin != "" && (allowed[origin] || allowed["*"]) {
+			if origin != "" && corsOriginAllowed(r.Context(), st, r.URL.Path, origin) {
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-Sentry-Auth, Authorization")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
@@ -136,6 +133,51 @@ func corsMiddleware(origins []string) func(http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// ingestProjectID parses /api/{projectID}/envelope or /api/{projectID}/store (with optional trailing slash).
+// Returns 0 when the path is not an ingest route.
+func ingestProjectID(path string) int64 {
+	path = strings.TrimSuffix(path, "/")
+	parts := strings.Split(path, "/")
+	// "", "api", "{id}", "envelope"|"store"
+	if len(parts) != 4 || parts[1] != "api" {
+		return 0
+	}
+	if parts[3] != "envelope" && parts[3] != "store" {
+		return 0
+	}
+	id, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil || id <= 0 {
+		return 0
+	}
+	return id
+}
+
+func corsOriginAllowed(ctx context.Context, st *store.Store, path, origin string) bool {
+	projectID := ingestProjectID(path)
+	if projectID == 0 {
+		// Internal API / SPA / health — allow any Origin (self-hosted admin UI).
+		return true
+	}
+	allowed, err := st.ProjectAllowedOrigins(ctx, projectID)
+	if err != nil {
+		return false
+	}
+	if allowed == nil {
+		// Project does not exist.
+		return false
+	}
+	if len(allowed) == 0 {
+		// Empty allowlist = allow any (Sentry-like).
+		return true
+	}
+	for _, o := range allowed {
+		if o == origin || o == "*" {
+			return true
+		}
+	}
+	return false
 }
 
 func serveSPA(r chi.Router, dist string) {

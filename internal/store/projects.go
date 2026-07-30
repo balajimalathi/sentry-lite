@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"database/sql"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"strings"
@@ -33,6 +34,41 @@ func Slugify(s string) string {
 	return s
 }
 
+func normalizeOrigins(origins []string) []string {
+	out := make([]string, 0, len(origins))
+	seen := map[string]bool{}
+	for _, o := range origins {
+		o = strings.TrimSpace(o)
+		if o == "" || seen[o] {
+			continue
+		}
+		seen[o] = true
+		out = append(out, o)
+	}
+	return out
+}
+
+func encodeOriginsJSON(origins []string) string {
+	origins = normalizeOrigins(origins)
+	b, err := json.Marshal(origins)
+	if err != nil {
+		return "[]"
+	}
+	return string(b)
+}
+
+func decodeOriginsJSON(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return []string{}
+	}
+	var out []string
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return []string{}
+	}
+	return normalizeOrigins(out)
+}
+
 func randomKey() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -41,7 +77,7 @@ func randomKey() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
-func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string) (*CreatedProject, error) {
+func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string, allowedOrigins []string) (*CreatedProject, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("name required")
@@ -50,6 +86,8 @@ func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string
 		slug = name
 	}
 	slug = Slugify(slug)
+	allowedOrigins = normalizeOrigins(allowedOrigins)
+	originsJSON := encodeOriginsJSON(allowedOrigins)
 
 	var orgID int64
 	err := s.DB.QueryRowContext(ctx, `SELECT id FROM organizations ORDER BY id ASC LIMIT 1`).Scan(&orgID)
@@ -96,8 +134,8 @@ func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string
 	defer tx.Rollback()
 
 	res, err := tx.ExecContext(ctx,
-		`INSERT INTO projects (organization_id, slug, name) VALUES (?, ?, ?)`,
-		orgID, slug, name,
+		`INSERT INTO projects (organization_id, slug, name, allowed_origins) VALUES (?, ?, ?, ?)`,
+		orgID, slug, name, originsJSON,
 	)
 	if err != nil {
 		return nil, err
@@ -129,15 +167,33 @@ func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string
 
 	return &CreatedProject{
 		Project: Project{
-			ID:        projectID,
-			Slug:      slug,
-			Name:      name,
-			CreatedAt: createdAt,
+			ID:             projectID,
+			Slug:           slug,
+			Name:           name,
+			AllowedOrigins: allowedOrigins,
+			CreatedAt:      createdAt,
 		},
 		PublicKey: pub,
 		SecretKey: sec,
 		DSN:       fmt.Sprintf("%s://%s@%s/%d", scheme, pub, host, projectID),
 	}, nil
+}
+
+// ProjectAllowedOrigins returns the CORS allowlist for a project.
+// An empty slice means allow any Origin (Sentry-like).
+// A nil slice with nil error means the project does not exist.
+func (s *Store) ProjectAllowedOrigins(ctx context.Context, projectID int64) ([]string, error) {
+	var raw string
+	err := s.DB.QueryRowContext(ctx,
+		`SELECT allowed_origins FROM projects WHERE id = ?`, projectID,
+	).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return decodeOriginsJSON(raw), nil
 }
 
 type Facets struct {

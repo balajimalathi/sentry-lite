@@ -233,13 +233,14 @@ SDKs use the public hostname in the DSN; nginx forwards envelopes to the app, wh
 | `DATA_DIR` | `./data` |
 | `REDPANDA_BROKERS` | `localhost:19092` |
 | `INGEST_TOPIC` | `events.ingest` |
-| `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` |
 | `WEB_DIST` | `./web/dist` |
 | `PUBLIC_URL` | `http://localhost:8080` (issue links in alerts) |
 | `ADMIN_TOKEN` | _(empty = management API open; required by Compose)_ |
 | `SENTRY_LITE_TOKEN` | _(release CLI; same value as `ADMIN_TOKEN`)_ |
 | `ALERT_SMTP` | _(empty = email alerts disabled)_ |
 | `ALERT_FROM` | `sentry-lite@localhost` |
+
+Browser SDK CORS is configured per project (`allowed_origins` on create). An empty list allows any Origin. The seeded demo project allows `http://localhost:5173`, `http://localhost:3000`, and `http://localhost:8080`.
 
 ## Troubleshooting
 
