@@ -328,10 +328,7 @@ func (h *Handler) DeleteAlert(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) Meta(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, map[string]any{
-		"seed_public_key": store.SeedPublicKey,
-		"seed_dsn_hint":   "http://" + store.SeedPublicKey + "@localhost:8080/1",
-	})
+	writeJSON(w, map[string]any{"ok": true})
 }
 
 func (h *Handler) ListTransactions(w http.ResponseWriter, r *http.Request) {

@@ -27,7 +27,6 @@ type Runner struct {
 	state      RunState
 	cancel     context.CancelFunc
 	cronToken  string
-	alertsSeed bool
 	startedAt  time.Time
 	doneCh     chan struct{}
 
@@ -61,12 +60,6 @@ func (r *Runner) StartedAt() time.Time {
 func (r *Runner) Done() <-chan struct{} { return r.doneCh }
 
 func (r *Runner) Prepare(ctx context.Context) error {
-	if !r.alertsSeed {
-		if err := r.client.SeedAlerts(ctx); err != nil {
-			// non-fatal: rules may already exist or project missing
-		}
-		r.alertsSeed = true
-	}
 	token, err := r.client.EnsureCron(ctx)
 	if err != nil {
 		// non-fatal: disable cron traffic if monitor cannot be created

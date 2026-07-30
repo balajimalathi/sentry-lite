@@ -111,10 +111,6 @@ func Open(path string) (*Store, error) {
 		_ = sqlDB.Close()
 		return nil, err
 	}
-	if err := s.seed(); err != nil {
-		_ = sqlDB.Close()
-		return nil, err
-	}
 	return s, nil
 }
 
@@ -128,43 +124,6 @@ func (s *Store) Close() error {
 
 func (s *Store) migrate() error {
 	return s.DB.AutoMigrate(allModels()...)
-}
-
-const (
-	SeedPublicKey = "a1b2c3d4e5f6789012345678abcdef01"
-	SeedSecretKey = "deadbeefdeadbeefdeadbeefdeadbeef"
-)
-
-func (s *Store) seed() error {
-	var n int64
-	if err := s.DB.Model(&Organization{}).Count(&n).Error; err != nil {
-		return err
-	}
-	if n > 0 {
-		return nil
-	}
-	return s.DB.Transaction(func(tx *gorm.DB) error {
-		org := Organization{Slug: "default", Name: "Default"}
-		if err := tx.Create(&org).Error; err != nil {
-			return err
-		}
-		seedOrigins := `["http://localhost:5173","http://localhost:3000","http://localhost:8080"]`
-		proj := ProjectRow{
-			OrganizationID: org.ID,
-			Slug:           "demo",
-			Name:           "Demo Project",
-			AllowedOrigins: seedOrigins,
-		}
-		if err := tx.Create(&proj).Error; err != nil {
-			return err
-		}
-		key := ProjectKeyRow{
-			ProjectID: proj.ID,
-			PublicKey: SeedPublicKey,
-			SecretKey: SeedSecretKey,
-		}
-		return tx.Create(&key).Error
-	})
 }
 
 func (s *Store) LookupProjectKey(ctx context.Context, publicKey string, projectID int64) (*ProjectKey, error) {

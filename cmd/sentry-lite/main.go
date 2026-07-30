@@ -93,7 +93,6 @@ func main() {
 
 	go func() {
 		log.Printf("listening on %s", cfg.HTTPAddr)
-		log.Printf("seed DSN: http://%s@localhost%s/1", store.SeedPublicKey, normalizePort(cfg.HTTPAddr))
 		if cfg.AdminToken == "" {
 			log.Printf("WARNING: ADMIN_TOKEN is unset — /api/internal/* and the UI are open; set ADMIN_TOKEN for any non-local deploy")
 		} else {
@@ -108,13 +107,6 @@ func main() {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
-}
-
-func normalizePort(addr string) string {
-	if strings.HasPrefix(addr, ":") {
-		return addr
-	}
-	return ":" + addr
 }
 
 func corsMiddleware(st *store.Store) func(http.Handler) http.Handler {
