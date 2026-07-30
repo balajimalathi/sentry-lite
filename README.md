@@ -246,6 +246,30 @@ To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Troubleshooting
 
+### Ghost issues / load-test leftovers
+
+Ingest lands in Redpanda first. If you wipe SQLite (or delete a project) but leave a topic backlog, the processor can rewrite old events — often as orphan `project_id`s with no matching project.
+
+**Fix:** always reset SQLite and Redpanda together. Stop the API / TUI / load tool first, then:
+
+```bash
+./scripts/wipe-local.sh        # prompts for confirmation
+# or
+./scripts/wipe-local.sh --yes
+```
+
+That deletes `./data/sentry-lite.db*` + `./data/events`, runs `docker compose -f docker-compose.redpanda.yml down -v`, and brings Redpanda back empty. Restart the app and create a fresh project.
+
+Check backlog:
+
+```bash
+docker compose -f docker-compose.redpanda.yml exec redpanda rpk group describe sentry-lite-processor
+```
+
+Non-zero `LAG` means messages are still waiting to be processed.
+
+### Consumer stuck after hard kill
+
 If ingest returns 200 but issues never appear after a hard kill, the Kafka consumer group may be stuck mid-rebalance:
 
 ```bash

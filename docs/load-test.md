@@ -76,6 +76,14 @@ Traffic goes to `POST /api/{project}/store/` with `X-Sentry-Auth` — same path 
 - **Triage UI**: Issues, Performance, Releases, Crons, Alerts
 - **Disk**: `./data/events/` grows ~one JSON file per event; 1M events can use significant disk
 
+After a large run, stop the load tool **and** the API/TUI before wiping. Reset SQLite and Redpanda together so backlog cannot resurrect old `project_id`s:
+
+```bash
+./scripts/wipe-local.sh --yes
+```
+
+See [README troubleshooting](../README.md#ghost-issues--load-test-leftovers).
+
 Restart the load TUI after rebuilding to pick up the new RAM/storage cards.
 
 ## Env
