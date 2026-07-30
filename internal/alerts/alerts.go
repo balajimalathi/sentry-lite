@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/smtp"
+	"net/url"
 	"strings"
 	"time"
 
@@ -170,6 +171,10 @@ func (d *Dispatcher) email(to, subject, body string) error {
 }
 
 func (d *Dispatcher) webhook(ctx context.Context, rule store.AlertRule, body map[string]any) error {
+	// Demo seeds point at example.com; skip the HTTP call so local runs don't spam 405s.
+	if isPlaceholderWebhook(rule.Target) {
+		return nil
+	}
 	raw, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rule.Target, bytes.NewReader(raw))
 	if err != nil {
@@ -190,4 +195,13 @@ func (d *Dispatcher) webhook(ctx context.Context, rule store.AlertRule, body map
 		return fmt.Errorf("webhook status %d", res.StatusCode)
 	}
 	return nil
+}
+
+func isPlaceholderWebhook(target string) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "example.com" || host == "www.example.com"
 }
