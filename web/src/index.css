@@ -6,328 +6,40 @@
 @custom-variant dark (&:is(.dark *));
 
 :root {
-  color-scheme: light;
-  --bg: #f6f4ef;
-  --panel: #fffdf8;
-  --ink: #1c1917;
-  --muted: oklch(0.967 0.001 286.375);
-  --line: #e7e0d5;
-  --accent: oklch(0.967 0.001 286.375);
-  --warn: #b45309;
-  --danger: #b91c1c;
-  --ok: #15803d;
-  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
-  line-height: 1.45;
-  color: var(--ink);
-  background:
-    radial-gradient(circle at 10% 0%, #efe8da 0%, transparent 40%),
-    radial-gradient(circle at 90% 10%, #d9ebe7 0%, transparent 35%),
-    var(--bg);
   --background: oklch(1 0 0);
-  --foreground: oklch(0.141 0.005 285.823);
+  --foreground: oklch(0.148 0.004 228.8);
   --card: oklch(1 0 0);
-  --card-foreground: oklch(0.141 0.005 285.823);
+  --card-foreground: oklch(0.148 0.004 228.8);
   --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.141 0.005 285.823);
-  --primary: oklch(0.527 0.154 150.069);
-  --primary-foreground: oklch(0.982 0.018 155.826);
+  --popover-foreground: oklch(0.148 0.004 228.8);
+  --primary: oklch(0.488 0.243 264.376);
+  --primary-foreground: oklch(0.97 0.014 254.604);
   --secondary: oklch(0.967 0.001 286.375);
   --secondary-foreground: oklch(0.21 0.006 285.885);
-  --muted-foreground: oklch(0.552 0.016 285.938);
-  --accent-foreground: oklch(0.21 0.006 285.885);
+  --muted: oklch(0.963 0.002 197.1);
+  --muted-foreground: oklch(0.56 0.021 213.5);
+  --accent: oklch(0.963 0.002 197.1);
+  --accent-foreground: oklch(0.218 0.008 223.9);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.92 0.004 286.32);
-  --input: oklch(0.92 0.004 286.32);
-  --ring: oklch(0.705 0.015 286.067);
-  --chart-1: oklch(0.871 0.006 286.286);
-  --chart-2: oklch(0.552 0.016 285.938);
-  --chart-3: oklch(0.442 0.017 285.786);
-  --chart-4: oklch(0.37 0.013 285.805);
-  --chart-5: oklch(0.274 0.006 286.033);
-  --radius: 0.875rem;
-  --sidebar: oklch(0.985 0 0);
-  --sidebar-foreground: oklch(0.141 0.005 285.823);
-  --sidebar-primary: oklch(0.627 0.194 149.214);
-  --sidebar-primary-foreground: oklch(0.982 0.018 155.826);
-  --sidebar-accent: oklch(0.967 0.001 286.375);
-  --sidebar-accent-foreground: oklch(0.21 0.006 285.885);
-  --sidebar-border: oklch(0.92 0.004 286.32);
-  --sidebar-ring: oklch(0.705 0.015 286.067);
+  --border: oklch(0.925 0.005 214.3);
+  --input: oklch(0.925 0.005 214.3);
+  --ring: oklch(0.723 0.014 214.4);
+  --chart-1: oklch(0.872 0.007 219.6);
+  --chart-2: oklch(0.56 0.021 213.5);
+  --chart-3: oklch(0.45 0.017 213.2);
+  --chart-4: oklch(0.378 0.015 216);
+  --chart-5: oklch(0.275 0.011 216.9);
+  --radius: 0.625rem;
+  --sidebar: oklch(0.987 0.002 197.1);
+  --sidebar-foreground: oklch(0.148 0.004 228.8);
+  --sidebar-primary: oklch(0.546 0.245 262.881);
+  --sidebar-primary-foreground: oklch(0.97 0.014 254.604);
+  --sidebar-accent: oklch(0.963 0.002 197.1);
+  --sidebar-accent-foreground: oklch(0.218 0.008 223.9);
+  --sidebar-border: oklch(0.925 0.005 214.3);
+  --sidebar-ring: oklch(0.723 0.014 214.4);
 }
 
-* {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  min-height: 100vh;
-}
-
-a {
-  color: var(--accent);
-  text-decoration: none;
-}
-
-a:hover {
-  text-decoration: underline;
-}
-
-.app {
-  max-width: 1100px;
-  margin: 0 auto;
-  padding: 1.25rem 1.5rem 3rem;
-}
-
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding-bottom: 1rem;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 1.5rem;
-}
-
-.brand {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-weight: 700;
-  font-size: 1.15rem;
-  color: var(--ink);
-  letter-spacing: -0.02em;
-}
-
-.topbar nav {
-  display: flex;
-  gap: 1rem;
-}
-
-.topbar nav a {
-  color: var(--muted);
-  font-weight: 500;
-}
-
-.topbar nav a.active {
-  color: var(--ink);
-}
-
-h1 {
-  margin: 0 0 0.35rem;
-  font-size: 1.75rem;
-  letter-spacing: -0.03em;
-}
-
-h2 {
-  margin: 0 0 0.75rem;
-  font-size: 1rem;
-}
-
-.muted {
-  color: var(--muted);
-}
-
-.error {
-  color: var(--danger);
-}
-
-.mono {
-  font-family: "IBM Plex Mono", ui-monospace, monospace;
-  font-size: 0.9em;
-}
-
-.table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--panel);
-  border: 1px solid var(--line);
-}
-
-.table th,
-.table td {
-  text-align: left;
-  padding: 0.65rem 0.75rem;
-  border-bottom: 1px solid var(--line);
-  vertical-align: top;
-}
-
-.table th {
-  font-size: 0.75rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.filters {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 0.75rem;
-  margin: 1rem 0 1.25rem;
-  align-items: end;
-}
-
-.filters label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.25rem;
-  font-size: 0.8rem;
-  color: var(--muted);
-}
-
-input,
-select,
-button {
-  font: inherit;
-  padding: 0.45rem 0.6rem;
-  border: 1px solid var(--line);
-  background: #fff;
-  color: var(--ink);
-}
-
-button {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-  cursor: pointer;
-}
-
-button.secondary {
-  background: #fff;
-  color: var(--ink);
-  border-color: var(--line);
-}
-
-.badge {
-  display: inline-block;
-  margin-left: 0.4rem;
-  padding: 0.1rem 0.4rem;
-  font-size: 0.7rem;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  border: 1px solid var(--line);
-  background: #fff;
-}
-
-.badge.warn {
-  color: var(--warn);
-  border-color: #fcd34d;
-}
-
-.status-open {
-  color: var(--danger);
-}
-
-.status-resolved {
-  color: var(--ok);
-}
-
-.status-ignored {
-  color: var(--muted);
-}
-
-.detail-head {
-  display: flex;
-  justify-content: space-between;
-  gap: 1rem;
-  align-items: flex-start;
-  flex-wrap: wrap;
-}
-
-.actions {
-  display: flex;
-  gap: 0.5rem;
-  align-items: center;
-  flex-wrap: wrap;
-}
-
-.meta-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-  gap: 0.75rem;
-  margin: 1.25rem 0;
-}
-
-.meta-grid .label {
-  display: block;
-  font-size: 0.75rem;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.panels {
-  display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
-  gap: 1rem;
-  margin-bottom: 1rem;
-}
-
-@media (max-width: 900px) {
-  .panels {
-    grid-template-columns: 1fr;
-  }
-}
-
-.panel {
-  background: var(--panel);
-  border: 1px solid var(--line);
-  padding: 1rem;
-  margin-bottom: 1rem;
-}
-
-.panel-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 0.5rem;
-  margin-bottom: 0.5rem;
-}
-
-.panel-head h2 {
-  margin: 0;
-}
-
-.frames {
-  margin: 0;
-  padding-left: 1.1rem;
-}
-
-.frames li {
-  margin-bottom: 0.4rem;
-  color: var(--muted);
-}
-
-.frames li.in-app {
-  color: var(--ink);
-  font-weight: 500;
-}
-
-.kv {
-  margin: 0;
-}
-
-.kv > div {
-  display: grid;
-  grid-template-columns: 1fr 1.4fr;
-  gap: 0.5rem;
-  padding: 0.3rem 0;
-  border-bottom: 1px solid var(--line);
-}
-
-.kv dt {
-  color: var(--muted);
-  font-size: 0.85rem;
-}
-
-.kv dd {
-  margin: 0;
-  word-break: break-word;
-}
-
-.crumb {
-  color: var(--muted);
-  margin-bottom: 0.5rem;
-}
 @theme inline {
   --font-heading: var(--font-sans);
   --font-sans: 'Inter Variable', sans-serif;
@@ -372,37 +84,37 @@ button.secondary {
 }
 
 .dark {
-  --background: oklch(0.141 0.005 285.823);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.21 0.006 285.885);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.21 0.006 285.885);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.448 0.119 151.328);
-  --primary-foreground: oklch(0.982 0.018 155.826);
+  --background: oklch(0.148 0.004 228.8);
+  --foreground: oklch(0.987 0.002 197.1);
+  --card: oklch(0.218 0.008 223.9);
+  --card-foreground: oklch(0.987 0.002 197.1);
+  --popover: oklch(0.218 0.008 223.9);
+  --popover-foreground: oklch(0.987 0.002 197.1);
+  --primary: oklch(0.424 0.199 265.638);
+  --primary-foreground: oklch(0.97 0.014 254.604);
   --secondary: oklch(0.274 0.006 286.033);
   --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.274 0.006 286.033);
-  --muted-foreground: oklch(0.705 0.015 286.067);
-  --accent: oklch(0.274 0.006 286.033);
-  --accent-foreground: oklch(0.985 0 0);
+  --muted: oklch(0.275 0.011 216.9);
+  --muted-foreground: oklch(0.723 0.014 214.4);
+  --accent: oklch(0.275 0.011 216.9);
+  --accent-foreground: oklch(0.987 0.002 197.1);
   --destructive: oklch(0.704 0.191 22.216);
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.552 0.016 285.938);
-  --chart-1: oklch(0.871 0.006 286.286);
-  --chart-2: oklch(0.552 0.016 285.938);
-  --chart-3: oklch(0.442 0.017 285.786);
-  --chart-4: oklch(0.37 0.013 285.805);
-  --chart-5: oklch(0.274 0.006 286.033);
-  --sidebar: oklch(0.21 0.006 285.885);
-  --sidebar-foreground: oklch(0.985 0 0);
-  --sidebar-primary: oklch(0.723 0.219 149.579);
-  --sidebar-primary-foreground: oklch(0.982 0.018 155.826);
-  --sidebar-accent: oklch(0.274 0.006 286.033);
-  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --ring: oklch(0.56 0.021 213.5);
+  --chart-1: oklch(0.872 0.007 219.6);
+  --chart-2: oklch(0.56 0.021 213.5);
+  --chart-3: oklch(0.45 0.017 213.2);
+  --chart-4: oklch(0.378 0.015 216);
+  --chart-5: oklch(0.275 0.011 216.9);
+  --sidebar: oklch(0.218 0.008 223.9);
+  --sidebar-foreground: oklch(0.987 0.002 197.1);
+  --sidebar-primary: oklch(0.623 0.214 259.815);
+  --sidebar-primary-foreground: oklch(0.97 0.014 254.604);
+  --sidebar-accent: oklch(0.275 0.011 216.9);
+  --sidebar-accent-foreground: oklch(0.987 0.002 197.1);
   --sidebar-border: oklch(1 0 0 / 10%);
-  --sidebar-ring: oklch(0.552 0.016 285.938);
+  --sidebar-ring: oklch(0.56 0.021 213.5);
 }
 
 @layer base {
@@ -412,7 +124,8 @@ button.secondary {
   body {
     @apply bg-background text-foreground;
   }
-  button:not(:disabled), [role="button"]:not(:disabled) {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
     cursor: pointer;
   }
   html {

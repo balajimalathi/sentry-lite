@@ -49,6 +49,7 @@ type Issue struct {
 	FirstRelease *string  `json:"first_release"`
 	LastRelease  *string  `json:"last_release"`
 	Regressed    bool     `json:"regressed"`
+	Assignee     *string  `json:"assignee,omitempty"`
 	Environments []string `json:"environments,omitempty"`
 }
 
@@ -76,8 +77,15 @@ type IssueListFilter struct {
 	Environment string
 	Release     string
 	Query       string
+	TagKey      string
+	TagValue    string
+	From        string // RFC3339
+	To          string // RFC3339
 	Limit       int
 }
+
+const QuietWindow = 24 * time.Hour
+
 
 func Open(path string) (*Store, error) {
 	dir := filepath.Dir(path)
@@ -111,19 +119,55 @@ func (s *Store) migrate() error {
 	if err != nil {
 		return err
 	}
+	// Sort by name so 001 then 002
+	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-			continue
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
+			names = append(names, e.Name())
 		}
-		b, err := migrationFS.ReadFile("migrations/" + e.Name())
+	}
+	for _, name := range names {
+		b, err := migrationFS.ReadFile("migrations/" + name)
 		if err != nil {
 			return err
 		}
-		if _, err := s.DB.Exec(string(b)); err != nil {
-			return fmt.Errorf("migrate %s: %w", e.Name(), err)
+		for _, stmt := range splitSQL(string(b)) {
+			if _, err := s.DB.Exec(stmt); err != nil {
+				msg := err.Error()
+				if strings.Contains(msg, "duplicate column") || strings.Contains(msg, "already exists") {
+					continue
+				}
+				return fmt.Errorf("migrate %s: %w", name, err)
+			}
 		}
 	}
 	return nil
+}
+
+func splitSQL(s string) []string {
+	parts := strings.Split(s, ";")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		// drop leading/inline comment-only lines
+		lines := strings.Split(p, "\n")
+		var kept []string
+		for _, line := range lines {
+			trim := strings.TrimSpace(line)
+			if trim == "" || strings.HasPrefix(trim, "--") {
+				continue
+			}
+			kept = append(kept, line)
+		}
+		p = strings.TrimSpace(strings.Join(kept, "\n"))
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 const (
@@ -225,14 +269,28 @@ func (s *Store) ListIssues(ctx context.Context, f IssueListFilter) ([]Issue, err
 		conds = append(conds, `EXISTS (SELECT 1 FROM event_tags et WHERE et.issue_id = i.id AND et.key = 'release' AND et.value = ?)`)
 		args = append(args, f.Release)
 	}
+	if f.TagKey != "" && f.TagValue != "" {
+		conds = append(conds, `EXISTS (SELECT 1 FROM event_tags et WHERE et.issue_id = i.id AND et.key = ? AND et.value = ?)`)
+		args = append(args, f.TagKey, f.TagValue)
+	}
+	if f.From != "" {
+		conds = append(conds, "i.last_seen >= ?")
+		args = append(args, f.From)
+	}
+	if f.To != "" {
+		conds = append(conds, "i.last_seen <= ?")
+		args = append(args, f.To)
+	}
 	if f.Query != "" {
-		conds = append(conds, "(i.title LIKE ? OR i.culprit LIKE ?)")
+		conds = append(conds, `(i.title LIKE ? OR i.culprit LIKE ? OR EXISTS (
+			SELECT 1 FROM events e WHERE e.issue_id = i.id AND (e.message LIKE ? OR e.exception_type LIKE ?)
+		))`)
 		q := "%" + f.Query + "%"
-		args = append(args, q, q)
+		args = append(args, q, q, q, q)
 	}
 	args = append(args, f.Limit)
 	query := `SELECT i.id, i.project_id, i.fingerprint, i.title, i.culprit, i.status, i.level,
-		i.count, i.first_seen, i.last_seen, i.first_release, i.last_release, i.regressed
+		i.count, i.first_seen, i.last_seen, i.first_release, i.last_release, i.regressed, i.assignee
 		FROM issues i WHERE ` + strings.Join(conds, " AND ") + ` ORDER BY i.last_seen DESC LIMIT ?`
 
 	rows, err := s.DB.QueryContext(ctx, query, args...)
@@ -257,11 +315,11 @@ type scannable interface {
 
 func scanIssue(row scannable) (*Issue, error) {
 	var iss Issue
-	var firstRel, lastRel sql.NullString
+	var firstRel, lastRel, assignee sql.NullString
 	var regressed int
 	if err := row.Scan(
 		&iss.ID, &iss.ProjectID, &iss.Fingerprint, &iss.Title, &iss.Culprit, &iss.Status, &iss.Level,
-		&iss.Count, &iss.FirstSeen, &iss.LastSeen, &firstRel, &lastRel, &regressed,
+		&iss.Count, &iss.FirstSeen, &iss.LastSeen, &firstRel, &lastRel, &regressed, &assignee,
 	); err != nil {
 		return nil, err
 	}
@@ -271,6 +329,9 @@ func scanIssue(row scannable) (*Issue, error) {
 	if lastRel.Valid {
 		iss.LastRelease = &lastRel.String
 	}
+	if assignee.Valid {
+		iss.Assignee = &assignee.String
+	}
 	iss.Regressed = regressed == 1
 	return &iss, nil
 }
@@ -278,7 +339,7 @@ func scanIssue(row scannable) (*Issue, error) {
 func (s *Store) GetIssue(ctx context.Context, id int64) (*Issue, error) {
 	row := s.DB.QueryRowContext(ctx, `
 		SELECT id, project_id, fingerprint, title, culprit, status, level, count,
-		       first_seen, last_seen, first_release, last_release, regressed
+		       first_seen, last_seen, first_release, last_release, regressed, assignee
 		FROM issues WHERE id = ?
 	`, id)
 	iss, err := scanIssue(row)
@@ -307,7 +368,20 @@ func (s *Store) GetIssue(ctx context.Context, id int64) (*Issue, error) {
 }
 
 func (s *Store) UpdateIssueStatus(ctx context.Context, id int64, status string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE issues SET status = ?, regressed = 0 WHERE id = ?`, status, id)
+	if status == "resolved" {
+		_, err := s.DB.ExecContext(ctx,
+			`UPDATE issues SET status = ?, regressed = 0, resolved_at = ? WHERE id = ?`,
+			status, time.Now().UTC().Format(time.RFC3339Nano), id)
+		return err
+	}
+	_, err := s.DB.ExecContext(ctx,
+		`UPDATE issues SET status = ?, regressed = 0, resolved_at = NULL WHERE id = ?`,
+		status, id)
+	return err
+}
+
+func (s *Store) UpdateIssueAssignee(ctx context.Context, id int64, assignee string) error {
+	_, err := s.DB.ExecContext(ctx, `UPDATE issues SET assignee = ? WHERE id = ?`, nullOrNil(assignee), id)
 	return err
 }
 
@@ -429,11 +503,11 @@ func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertRe
 
 	var issueID int64
 	var status string
-	var firstRelease, lastRelease sql.NullString
+	var firstRelease, lastRelease, resolvedAt sql.NullString
 	err = tx.QueryRowContext(ctx,
-		`SELECT id, status, first_release, last_release FROM issues WHERE project_id = ? AND fingerprint = ?`,
+		`SELECT id, status, first_release, last_release, resolved_at FROM issues WHERE project_id = ? AND fingerprint = ?`,
 		in.ProjectID, in.Fingerprint,
-	).Scan(&issueID, &status, &firstRelease, &lastRelease)
+	).Scan(&issueID, &status, &firstRelease, &lastRelease, &resolvedAt)
 
 	result := &UpsertResult{}
 	if err == sql.ErrNoRows {
@@ -453,7 +527,7 @@ func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertRe
 		result.IssueID = issueID
 		newStatus := status
 		regressedSQL := "regressed"
-		if status == "resolved" {
+		if status == "resolved" && shouldRegress(in.Release, lastRelease, resolvedAt, in.Timestamp) {
 			newStatus = "open"
 			regressedSQL = "1"
 			result.Regressed = true
@@ -466,11 +540,19 @@ func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertRe
 			}
 			lastRel = sql.NullString{String: in.Release, Valid: true}
 		}
-		q := `
-			UPDATE issues SET count = count + 1, last_seen = ?, status = ?, regressed = ` + regressedSQL + `,
-			       title = ?, culprit = ?, first_release = ?, last_release = ?
-			WHERE id = ?`
-		_, err = tx.ExecContext(ctx, q, ts, newStatus, in.Title, in.Culprit, nullStrVal(firstRel), nullStrVal(lastRel), issueID)
+		if result.Regressed {
+			_, err = tx.ExecContext(ctx, `
+				UPDATE issues SET count = count + 1, last_seen = ?, status = ?, regressed = 1,
+				       title = ?, culprit = ?, first_release = ?, last_release = ?, resolved_at = NULL
+				WHERE id = ?`,
+				ts, newStatus, in.Title, in.Culprit, nullStrVal(firstRel), nullStrVal(lastRel), issueID)
+		} else {
+			_, err = tx.ExecContext(ctx, `
+				UPDATE issues SET count = count + 1, last_seen = ?, status = ?, regressed = `+regressedSQL+`,
+				       title = ?, culprit = ?, first_release = ?, last_release = ?
+				WHERE id = ?`,
+				ts, newStatus, in.Title, in.Culprit, nullStrVal(firstRel), nullStrVal(lastRel), issueID)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -531,3 +613,22 @@ func nullStrVal(ns sql.NullString) any {
 	}
 	return nil
 }
+
+// shouldRegress: newer/different release than last_release, OR quiet window elapsed since resolve.
+func shouldRegress(eventRelease string, lastRelease, resolvedAt sql.NullString, eventTS time.Time) bool {
+	if eventRelease != "" && lastRelease.Valid && eventRelease != lastRelease.String {
+		return true
+	}
+	if !resolvedAt.Valid || resolvedAt.String == "" {
+		return true // no resolved_at → treat as regression (legacy rows)
+	}
+	rt, err := time.Parse(time.RFC3339Nano, resolvedAt.String)
+	if err != nil {
+		rt, err = time.Parse(time.RFC3339, resolvedAt.String)
+		if err != nil {
+			return true
+		}
+	}
+	return eventTS.Sub(rt) >= QuietWindow
+}
+

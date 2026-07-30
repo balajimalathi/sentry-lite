@@ -13,6 +13,9 @@ type Config struct {
 	CORSOrigins     []string
 	IngestTopic     string
 	WebDist         string
+	PublicURL       string
+	AlertSMTP       string
+	AlertFrom       string
 }
 
 func Load() Config {
@@ -26,6 +29,9 @@ func Load() Config {
 		CORSOrigins:     splitCSV(cors),
 		IngestTopic:     env("INGEST_TOPIC", "events.ingest"),
 		WebDist:         env("WEB_DIST", "./web/dist"),
+		PublicURL:       env("PUBLIC_URL", "http://localhost:8080"),
+		AlertSMTP:       env("ALERT_SMTP", ""),
+		AlertFrom:       env("ALERT_FROM", "sentry-lite@localhost"),
 	}
 }
 

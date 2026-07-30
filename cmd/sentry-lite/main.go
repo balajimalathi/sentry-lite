@@ -13,6 +13,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
+	"github.com/skndan/sentry-lite/internal/alerts"
 	"github.com/skndan/sentry-lite/internal/api"
 	"github.com/skndan/sentry-lite/internal/bus"
 	"github.com/skndan/sentry-lite/internal/config"
@@ -42,7 +43,17 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	worker := &process.Worker{Store: st, Bus: b, DataDir: cfg.DataDir}
+	worker := &process.Worker{
+		Store:   st,
+		Bus:     b,
+		DataDir: cfg.DataDir,
+		Alerts: &alerts.Dispatcher{
+			Store:   st,
+			APIBase: cfg.PublicURL,
+			SMTP:    cfg.AlertSMTP,
+			From:    cfg.AlertFrom,
+		},
+	}
 	go worker.Run(ctx)
 
 	r := chi.NewRouter()

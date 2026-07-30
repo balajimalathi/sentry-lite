@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skndan/sentry-lite/internal/alerts"
 	"github.com/skndan/sentry-lite/internal/bus"
 	"github.com/skndan/sentry-lite/internal/fingerprint"
 	"github.com/skndan/sentry-lite/internal/ingest"
@@ -21,6 +22,7 @@ type Worker struct {
 	Store   *store.Store
 	Bus     *bus.Bus
 	DataDir string
+	Alerts  *alerts.Dispatcher
 }
 
 func (w *Worker) Run(ctx context.Context) {
@@ -110,7 +112,7 @@ func (w *Worker) handle(ctx context.Context, value []byte) error {
 		"breadcrumbs":    norm.Breadcrumbs,
 	})
 
-	_, err = w.Store.UpsertEvent(ctx, store.UpsertEventInput{
+	result, err := w.Store.UpsertEvent(ctx, store.UpsertEventInput{
 		EventID:       norm.EventID,
 		ProjectID:     msg.ProjectID,
 		Fingerprint:   fp,
@@ -129,7 +131,36 @@ func (w *Worker) handle(ctx context.Context, value []byte) error {
 		PayloadJSON:   string(summary),
 		Tags:          norm.Tags,
 	})
-	return err
+	if err != nil {
+		return err
+	}
+
+	if norm.Release != "" {
+		if _, err := w.Store.UpsertRelease(ctx, msg.ProjectID, norm.Release, "", ""); err != nil {
+			log.Printf("upsert release: %v", err)
+		}
+	}
+
+	if w.Alerts != nil && result != nil {
+		base := alerts.Event{
+			ProjectID: msg.ProjectID,
+			IssueID:   result.IssueID,
+			Title:     title,
+			Culprit:   culprit,
+			Summary:   truncate(norm.Message, 200),
+		}
+		if result.IsNew {
+			base.Trigger = "new_issue"
+			w.Alerts.Handle(ctx, base)
+		}
+		if result.Regressed {
+			base.Trigger = "regressed_issue"
+			w.Alerts.Handle(ctx, base)
+		}
+		base.Trigger = "error_volume"
+		w.Alerts.Handle(ctx, base)
+	}
+	return nil
 }
 
 func (w *Worker) writePayload(projectID int64, eventID string, payload []byte) (string, error) {

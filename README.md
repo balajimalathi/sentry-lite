@@ -73,6 +73,24 @@ bun run send.ts
 
 Then open Issues in the UI — identical errors should group into one issue.
 
+## Dev TUI (start everything)
+
+One command starts Redpanda (Docker), the Go API, and the Vite web app, with live logs:
+
+```bash
+go run ./cmd/sentry-lite-tui
+```
+
+On launch it runs:
+
+1. `docker compose -f docker-compose.redpanda.yml up -d` (+ log tail)
+2. `bun run dev` in `web/`
+3. `go run ./cmd/sentry-lite`
+
+Left sidebar panels: `1` redpanda · `2` api · `3` web · `4` stats (live RAM/CPU/disk).
+
+Keys: `1–4` select · `tab` cycle · `a` restart all · `s` restart · `x` stop · `r` refresh stats · `q` quit (stops API + web; leaves Redpanda running)
+
 ## API surface
 
 | Endpoint | Purpose |
@@ -80,10 +98,20 @@ Then open Issues in the UI — identical errors should group into one issue.
 | `POST /api/{project_id}/envelope/` | Sentry envelope ingest |
 | `POST /api/{project_id}/store/` | Legacy JSON store |
 | `GET /api/internal/projects` | Project list |
-| `GET /api/internal/issues` | Issue list (`project_id`, `environment`, `release`, `q`) |
+| `GET /api/internal/issues` | Issue list (`project_id`, `environment`, `release`, `q`, `tag`/`tag_key`+`tag_value`, `from`, `to`) |
 | `GET /api/internal/issues/{id}` | Issue + latest event |
-| `PATCH /api/internal/issues/{id}` | `{ "status": "open\|resolved\|ignored" }` |
+| `PATCH /api/internal/issues/{id}` | `{ "status": "open\|resolved\|ignored", "assignee": "..." }` |
+| `GET /api/internal/releases?project_id=` | Release health (issue/event counts) |
+| `POST /api/internal/releases` | Register release `{ project_id, version, ref?, url? }` |
+| `GET /api/internal/alerts?project_id=` | Alert rules |
+| `POST /api/internal/alerts` | Create rule (`new_issue` / `regressed_issue` / `error_volume`; `slack` / `email` / `webhook`) |
 | `GET /healthz` | Health check |
+
+Release CLI:
+
+```bash
+go run ./cmd/sentry-lite-release -version=1.2.3 [-project=1]
+```
 
 ## Env vars
 
@@ -96,6 +124,9 @@ Then open Issues in the UI — identical errors should group into one issue.
 | `INGEST_TOPIC` | `events.ingest` |
 | `CORS_ORIGINS` | `http://localhost:5173` |
 | `WEB_DIST` | `./web/dist` |
+| `PUBLIC_URL` | `http://localhost:8080` (issue links in alerts) |
+| `ALERT_SMTP` | _(empty = email alerts disabled)_ |
+| `ALERT_FROM` | `sentry-lite@localhost` |
 
 ## Troubleshooting
 
