@@ -53,8 +53,11 @@ func (h *Handler) HandleEnvelope(w http.ResponseWriter, r *http.Request) {
 
 	eventJSON, eventID, err := extractEventFromEnvelope(body)
 	if err != nil {
-		log.Printf("envelope parse: %v", err)
-		http.Error(w, "invalid envelope", http.StatusBadRequest)
+		// Non-event envelopes (session, client_report, etc.) — ack without enqueue
+		log.Printf("envelope skip: %v", err)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
 		return
 	}
 	if eventID == "" {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api, formatTime, parsePayload, type Event, type Frame, type Issue } from '../api'
+import { api, formatTime, parsePayload, type Event, type Frame, type Issue } from '@/api'
 
 export default function IssueDetailPage() {
   const { id = '' } = useParams()

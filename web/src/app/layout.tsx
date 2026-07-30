@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 
-export default function App() {
+export default function RootLayout() {
   return (
     <div className="app">
       <header className="topbar">

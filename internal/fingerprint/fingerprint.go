@@ -53,13 +53,13 @@ func Compute(explicit []string, exceptionType, message string, frames []Frame) s
 }
 
 func topFrame(frames []Frame) *Frame {
-	for i := range frames {
+	// Prefer the most recent in-app frame (Sentry frames are usually oldest→newest)
+	for i := len(frames) - 1; i >= 0; i-- {
 		if frames[i].InApp {
 			return &frames[i]
 		}
 	}
 	if len(frames) > 0 {
-		// Sentry stacks are usually bottom-up; prefer last frame as "top"
 		return &frames[len(frames)-1]
 	}
 	return nil

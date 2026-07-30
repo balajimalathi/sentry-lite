@@ -9,6 +9,7 @@ RUN bun run build
 
 FROM golang:1.24-bookworm AS go-builder
 WORKDIR /src
+ENV GOTOOLCHAIN=auto
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .

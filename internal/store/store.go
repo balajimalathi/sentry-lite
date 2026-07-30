@@ -451,11 +451,11 @@ func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertRe
 		return nil, err
 	} else {
 		result.IssueID = issueID
-		regressed := 0
 		newStatus := status
+		regressedSQL := "regressed"
 		if status == "resolved" {
 			newStatus = "open"
-			regressed = 1
+			regressedSQL = "1"
 			result.Regressed = true
 		}
 		firstRel := firstRelease
@@ -466,11 +466,11 @@ func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertRe
 			}
 			lastRel = sql.NullString{String: in.Release, Valid: true}
 		}
-		_, err = tx.ExecContext(ctx, `
-			UPDATE issues SET count = count + 1, last_seen = ?, status = ?, regressed = ?,
+		q := `
+			UPDATE issues SET count = count + 1, last_seen = ?, status = ?, regressed = ` + regressedSQL + `,
 			       title = ?, culprit = ?, first_release = ?, last_release = ?
-			WHERE id = ?
-		`, ts, newStatus, regressed, in.Title, in.Culprit, nullStrVal(firstRel), nullStrVal(lastRel), issueID)
+			WHERE id = ?`
+		_, err = tx.ExecContext(ctx, q, ts, newStatus, in.Title, in.Culprit, nullStrVal(firstRel), nullStrVal(lastRel), issueID)
 		if err != nil {
 			return nil, err
 		}

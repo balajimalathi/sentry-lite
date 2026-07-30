@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api, formatTime, type Project } from '../api'
+import { api, formatTime, type Project } from '@/api'
 
-export default function ProjectsPage() {
+export default function HomePage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [error, setError] = useState('')
 

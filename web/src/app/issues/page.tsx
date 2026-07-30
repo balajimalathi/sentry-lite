@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { api, formatTime, type Issue, type Project } from '../api'
+import { api, formatTime, type Issue, type Project } from '@/api'
 
 export default function IssuesPage() {
   const [params, setParams] = useSearchParams()

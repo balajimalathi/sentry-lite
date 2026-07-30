@@ -1,30 +1,4 @@
 services:
-  redpanda:
-    image: redpandadata/redpanda:v24.2.4
-    command:
-      - redpanda
-      - start
-      - --overprovisioned
-      - --smp=1
-      - --memory=512M
-      - --reserve-memory=0M
-      - --node-id=0
-      - --check=false
-      - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
-      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
-      - --pandaproxy-addr=internal://0.0.0.0:8082,external://0.0.0.0:18082
-      - --advertise-pandaproxy-addr=internal://redpanda:8082,external://localhost:18082
-    ports:
-      - "19092:19092"
-      - "18082:18082"
-    volumes:
-      - redpanda_data:/var/lib/redpanda/data
-    healthcheck:
-      test: ["CMD-SHELL", "rpk cluster health | grep -q 'Healthy'"]
-      interval: 5s
-      timeout: 10s
-      retries: 12
-
   app:
     build: .
     ports:
@@ -38,10 +12,13 @@ services:
       WEB_DIST: /app/web/dist
     volumes:
       - app_data:/data
-    depends_on:
-      redpanda:
-        condition: service_healthy
+    networks:
+      - sentry-lite-net
 
 volumes:
-  redpanda_data:
   app_data:
+
+networks:
+  sentry-lite-net:
+    external: true
+    name: sentry-lite-net

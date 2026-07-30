@@ -29,7 +29,7 @@ func (w *Worker) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		fetches := w.Bus.Client.PollFetches(ctx)
+		fetches := w.Bus.Consumer.PollFetches(ctx)
 		if errs := fetches.Errors(); len(errs) > 0 {
 			for _, e := range errs {
 				if e.Err == context.Canceled || e.Err == context.DeadlineExceeded {
@@ -41,9 +41,11 @@ func (w *Worker) Run(ctx context.Context) {
 		fetches.EachRecord(func(r *kgo.Record) {
 			if err := w.handle(ctx, r.Value); err != nil {
 				log.Printf("process error: %v", err)
+				return
 			}
+			log.Printf("processed event offset=%d", r.Offset)
 		})
-		if err := w.Bus.Client.CommitUncommittedOffsets(ctx); err != nil {
+		if err := w.Bus.Consumer.CommitUncommittedOffsets(ctx); err != nil {
 			log.Printf("commit: %v", err)
 		}
 	}
