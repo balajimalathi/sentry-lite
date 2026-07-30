@@ -152,7 +152,12 @@ func (s *Store) ListCronMonitors(ctx context.Context, projectID int64) ([]CronMo
 }
 
 func (s *Store) DeleteCronMonitor(ctx context.Context, id int64) error {
-	return s.DB.WithContext(ctx).Delete(&CronMonitorRow{}, id).Error
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("monitor_id = ?", id).Delete(&CronCheckinRow{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&CronMonitorRow{}, id).Error
+	})
 }
 
 func (s *Store) UpdateCronMonitor(ctx context.Context, id int64, name string, scheduleSec, graceSec int64, env string) (*CronMonitor, error) {

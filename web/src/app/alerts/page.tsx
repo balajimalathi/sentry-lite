@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
-import { AlertCircleIcon, PlusIcon } from 'lucide-react'
+import { AlertCircleIcon, PlusIcon, Trash2Icon } from 'lucide-react'
 import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
 import { api, type AlertRule } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
@@ -12,6 +12,17 @@ import {
   PageHeaderActionLabel,
 } from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -75,6 +86,8 @@ export default function AlertsPage() {
   })
 
   const [open, setOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<AlertRule | null>(null)
+  const [formProjectId, setFormProjectId] = useState('')
   const [name, setName] = useState('New issue alert')
   const [trigger, setTrigger] = useState('new_issue')
   const [channel, setChannel] = useState('webhook')
@@ -104,15 +117,20 @@ export default function AlertsPage() {
     () => projects.map((p) => ({ label: p.name, value: String(p.id) })),
     [projects]
   )
+  const projectItems = projectOptions
 
   const selectedProjectId = firstFilterValue(
     basicColumnFilters.find((f) => f.id === 'project_id')?.value
   )
 
-  // Alerts: empty project = all; for create dialog default to first project.
+  // Alerts: empty project filter = all; create dialog uses explicit project.
   const listProjectId = selectedProjectId
-  const createProjectId =
+  const defaultProjectId =
     selectedProjectId || (projects[0] ? String(projects[0].id) : '')
+  const formProject =
+    formProjectId ||
+    defaultProjectId ||
+    (projects[0] ? String(projects[0].id) : '')
 
   const rulesQuery = useQuery({
     queryKey: ['alerts', listProjectId || 'all'],
@@ -124,7 +142,7 @@ export default function AlertsPage() {
       const resolvedTarget =
         channel === 'telegram' ? `${botToken.trim()}|${chatId.trim()}` : target
       return api.createAlert({
-        project_id: Number(createProjectId),
+        project_id: Number(formProject),
         name,
         trigger,
         channel,
@@ -143,6 +161,14 @@ export default function AlertsPage() {
       void qc.invalidateQueries({ queryKey: ['alerts'] })
     },
     onError: (e) => setFormError(String(e)),
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (id: number) => api.deleteAlert(id),
+    onSuccess: () => {
+      setDeleteTarget(null)
+      void qc.invalidateQueries({ queryKey: ['alerts'] })
+    },
   })
 
   const enabledOptions = useMemo(
@@ -262,6 +288,24 @@ export default function AlertsPage() {
           return selected.includes(String(row.original.enabled))
         },
       },
+      {
+        id: 'actions',
+        enableSorting: false,
+        enableHiding: false,
+        header: () => <span className="sr-only">Actions</span>,
+        cell: ({ row }) => (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            aria-label={`Delete ${row.original.name}`}
+            onClick={() => setDeleteTarget(row.original)}
+          >
+            <Trash2Icon data-icon="inline-start" />
+            Delete
+          </Button>
+        ),
+      },
     ],
     [projectOptions, enabledOptions, projects]
   )
@@ -282,10 +326,15 @@ export default function AlertsPage() {
     },
   })
 
-  const error = rulesQuery.error ? String(rulesQuery.error) : ''
+  const error = rulesQuery.error
+    ? String(rulesQuery.error)
+    : deleteMutation.error
+      ? String(deleteMutation.error)
+      : ''
 
   function onCreate(e: FormEvent) {
     e.preventDefault()
+    if (!formProject) return
     createMutation.mutate()
   }
 
@@ -295,11 +344,19 @@ export default function AlertsPage() {
         title="Alerts"
         description="Notify on issues, volume, and missed crons."
         actions={
-          <Dialog open={open} onOpenChange={setOpen}>
+          <Dialog
+            open={open}
+            onOpenChange={(next) => {
+              setOpen(next)
+              if (next && !formProjectId && defaultProjectId) {
+                setFormProjectId(defaultProjectId)
+              }
+            }}
+          >
             <DialogTrigger
               render={
                 <Button
-                  disabled={!createProjectId}
+                  disabled={!formProject}
                   aria-label="Create rule"
                 />
               }
@@ -317,6 +374,29 @@ export default function AlertsPage() {
               </DialogHeader>
               <form onSubmit={onCreate} className="flex flex-col gap-4">
                 <FieldGroup className="grid gap-3 sm:grid-cols-2">
+                  <Field className="sm:col-span-2">
+                    <FieldLabel>Project</FieldLabel>
+                    <Select
+                      items={projectItems}
+                      value={formProject || undefined}
+                      onValueChange={(v) =>
+                        setFormProjectId(v == null ? '' : String(v))
+                      }
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select project" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {projectItems.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
                   <Field>
                     <FieldLabel>Name</FieldLabel>
                     <Input
@@ -418,7 +498,7 @@ export default function AlertsPage() {
                 <DialogFooter>
                   <Button
                     type="submit"
-                    disabled={createMutation.isPending || !createProjectId}
+                    disabled={createMutation.isPending || !formProject}
                   >
                     Create
                   </Button>
@@ -428,6 +508,43 @@ export default function AlertsPage() {
           </Dialog>
         }
       />
+
+      <AlertDialog
+        open={deleteTarget != null}
+        onOpenChange={(next) => {
+          if (!next) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <Trash2Icon />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Delete alert rule?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes{' '}
+              <span className="font-medium text-foreground">
+                {deleteTarget?.name}
+              </span>{' '}
+              and its delivery history. This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={deleteMutation.isPending || deleteTarget == null}
+              onClick={() => {
+                if (deleteTarget) deleteMutation.mutate(deleteTarget.id)
+              }}
+            >
+              Delete rule
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {error && (
         <Alert variant="destructive">

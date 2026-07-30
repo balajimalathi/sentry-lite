@@ -253,6 +253,10 @@ export const api = {
     target: string
     secret?: string
   }) => post<AlertRule>('/api/internal/alerts', body),
+  deleteAlert: async (id: number) => {
+    const res = await apiFetch(`/api/internal/alerts/${id}`, { method: 'DELETE' })
+    if (!res.ok) throw new Error(`${res.status}`)
+  },
   transactions: (projectId: string) =>
     get<TransactionSummary[]>(
       `/api/internal/transactions?project_id=${projectId}`

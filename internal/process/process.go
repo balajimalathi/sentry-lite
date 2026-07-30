@@ -43,9 +43,7 @@ func (w *Worker) Run(ctx context.Context) {
 		fetches.EachRecord(func(r *kgo.Record) {
 			if err := w.handle(ctx, r.Value); err != nil {
 				log.Printf("process error: %v", err)
-				return
 			}
-			log.Printf("processed event offset=%d", r.Offset)
 		})
 		if err := w.Bus.Consumer.CommitUncommittedOffsets(ctx); err != nil {
 			log.Printf("commit: %v", err)

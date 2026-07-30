@@ -215,6 +215,15 @@ func (s *Store) RecordAlertDelivery(ctx context.Context, ruleID, issueID int64, 
 	return s.DB.WithContext(ctx).Create(&row).Error
 }
 
+func (s *Store) DeleteAlertRule(ctx context.Context, id int64) error {
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("rule_id = ?", id).Delete(&AlertDeliveryRow{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&AlertRuleRow{}, id).Error
+	})
+}
+
 func alertRuleFromRow(row *AlertRuleRow) *AlertRule {
 	rule := &AlertRule{
 		ID:        row.ID,

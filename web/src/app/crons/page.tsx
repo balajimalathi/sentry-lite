@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
-import { AlertCircleIcon, PlusIcon } from 'lucide-react'
+import { AlertCircleIcon, PlusIcon, Trash2Icon } from 'lucide-react'
 import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
 import { api, formatRelativeTime, formatTime, type CronMonitor } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
@@ -12,6 +12,17 @@ import {
   PageHeaderActionLabel,
 } from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogMedia,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -25,6 +36,14 @@ import {
 } from '@/components/ui/dialog'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useDataTable } from '@/hooks/use-data-table'
 import { firstFilterValue } from '@/lib/row-filters'
@@ -59,6 +78,8 @@ export default function CronsPage() {
   })
 
   const [open, setOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<CronMonitor | null>(null)
+  const [formProjectId, setFormProjectId] = useState('')
   const [name, setName] = useState('')
   const [scheduleSec, setScheduleSec] = useState('60')
   const [graceSec, setGraceSec] = useState('30')
@@ -84,6 +105,7 @@ export default function CronsPage() {
     () => projects.map((p) => ({ label: p.name, value: String(p.id) })),
     [projects]
   )
+  const projectItems = projectOptions
 
   const selectedProjectId = firstFilterValue(
     basicColumnFilters.find((f) => f.id === 'project_id')?.value
@@ -91,6 +113,9 @@ export default function CronsPage() {
 
   const projectId =
     selectedProjectId || (projects[0] ? String(projects[0].id) : '')
+
+  const formProject =
+    formProjectId || projectId || (projects[0] ? String(projects[0].id) : '')
 
   const cronsQuery = useQuery({
     queryKey: ['crons', projectId],
@@ -101,7 +126,7 @@ export default function CronsPage() {
   const createMutation = useMutation({
     mutationFn: () =>
       api.createCron({
-        project_id: Number(projectId),
+        project_id: Number(formProject),
         name: name.trim(),
         schedule_sec: Number(scheduleSec) || 60,
         grace_sec: Number(graceSec) || 30,
@@ -110,7 +135,7 @@ export default function CronsPage() {
       setName('')
       setFormError('')
       setOpen(false)
-      void qc.invalidateQueries({ queryKey: ['crons', projectId] })
+      void qc.invalidateQueries({ queryKey: ['crons'] })
     },
     onError: (err) => setFormError(String(err)),
   })
@@ -118,6 +143,7 @@ export default function CronsPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: number) => api.deleteCron(id),
     onSuccess: () => {
+      setDeleteTarget(null)
       void qc.invalidateQueries({ queryKey: ['crons', projectId] })
     },
   })
@@ -298,14 +324,16 @@ export default function CronsPage() {
         id: 'actions',
         enableSorting: false,
         enableHiding: false,
-        header: () => null,
+        header: () => <span className="sr-only">Actions</span>,
         cell: ({ row }) => (
           <Button
             type="button"
             size="sm"
             variant="outline"
-            onClick={() => deleteMutation.mutate(row.original.id)}
+            aria-label={`Delete ${row.original.name}`}
+            onClick={() => setDeleteTarget(row.original)}
           >
+            <Trash2Icon data-icon="inline-start" />
             Delete
           </Button>
         ),
@@ -316,7 +344,6 @@ export default function CronsPage() {
       projectOptions,
       envOptions,
       publicBase,
-      deleteMutation,
       projects,
     ]
   )
@@ -344,7 +371,7 @@ export default function CronsPage() {
 
   function onCreate(e: FormEvent) {
     e.preventDefault()
-    if (!name.trim() || !projectId) return
+    if (!name.trim() || !formProject) return
     createMutation.mutate()
   }
 
@@ -354,10 +381,18 @@ export default function CronsPage() {
         title="Crons"
         description="Heartbeat monitors for scheduled jobs."
         actions={
-          <Dialog open={open} onOpenChange={setOpen}>
+          <Dialog
+            open={open}
+            onOpenChange={(next) => {
+              setOpen(next)
+              if (next && !formProjectId && projectId) {
+                setFormProjectId(projectId)
+              }
+            }}
+          >
             <DialogTrigger
               render={
-                <Button disabled={!projectId} aria-label="Create monitor" />
+                <Button disabled={!formProject} aria-label="Create monitor" />
               }
             >
               <PlusIcon data-icon="inline-start" />
@@ -372,6 +407,29 @@ export default function CronsPage() {
               </DialogHeader>
               <form onSubmit={onCreate} className="flex flex-col gap-4">
                 <FieldGroup className="grid gap-3">
+                  <Field>
+                    <FieldLabel>Project</FieldLabel>
+                    <Select
+                      items={projectItems}
+                      value={formProject || undefined}
+                      onValueChange={(v) =>
+                        setFormProjectId(v == null ? '' : String(v))
+                      }
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select project" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {projectItems.map((item) => (
+                            <SelectItem key={item.value} value={item.value}>
+                              {item.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </Field>
                   <Field>
                     <FieldLabel htmlFor="cron-name">Name</FieldLabel>
                     <Input
@@ -408,7 +466,10 @@ export default function CronsPage() {
                   </Alert>
                 )}
                 <DialogFooter>
-                  <Button type="submit" disabled={createMutation.isPending}>
+                  <Button
+                    type="submit"
+                    disabled={!formProject || createMutation.isPending}
+                  >
                     Create
                   </Button>
                 </DialogFooter>
@@ -417,6 +478,44 @@ export default function CronsPage() {
           </Dialog>
         }
       />
+
+      <AlertDialog
+        open={deleteTarget != null}
+        onOpenChange={(next) => {
+          if (!next) setDeleteTarget(null)
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogMedia>
+              <Trash2Icon />
+            </AlertDialogMedia>
+            <AlertDialogTitle>Delete cron monitor?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes{' '}
+              <span className="font-medium text-foreground">
+                {deleteTarget?.name}
+              </span>{' '}
+              and its check-in history. The check-in URL will stop working.
+              This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={deleteMutation.isPending || deleteTarget == null}
+              onClick={() => {
+                if (deleteTarget) deleteMutation.mutate(deleteTarget.id)
+              }}
+            >
+              Delete monitor
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {error && (
         <Alert variant="destructive">

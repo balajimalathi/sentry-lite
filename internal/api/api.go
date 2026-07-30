@@ -37,6 +37,7 @@ func (h *Handler) Routes(r chi.Router) {
 
 		r.Get("/alerts", h.ListAlerts)
 		r.Post("/alerts", h.CreateAlert)
+		r.Delete("/alerts/{id}", h.DeleteAlert)
 
 		r.Get("/transactions", h.ListTransactions)
 		r.Get("/transaction", h.GetTransaction)
@@ -311,6 +312,19 @@ func (h *Handler) CreateAlert(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, rule)
+}
+
+func (h *Handler) DeleteAlert(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	if err := h.Store.DeleteAlertRule(r.Context(), id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) Meta(w http.ResponseWriter, r *http.Request) {
