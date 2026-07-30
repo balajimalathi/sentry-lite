@@ -117,6 +117,16 @@ bun run dev
 
 Points `@sentry/nextjs` at project 3 — full feature playground (errors, mock APIs / performance, releases, crons, alerts). See [`examples/nextjs/README.md`](examples/nextjs/README.md).
 
+### Load test TUI
+
+Stress/peak ingest against the API (errors, transactions, crons, releases — same mix as the playground):
+
+```bash
+go run ./cmd/sentry-lite-load
+```
+
+Headless 1M-event run: see [`docs/load-test.md`](docs/load-test.md).
+
 ### Cron check-in
 
 Create a monitor in the Crons UI, then:

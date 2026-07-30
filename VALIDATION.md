@@ -77,7 +77,7 @@ Helper script: [scripts/v1_validate.py](scripts/v1_validate.py)
 | Tag filter | Pass | `?tag=service:demo` / `tag_key`+`tag_value` (covers `user.id`) |
 | Text + message search | Pass | `q` matches title, culprit, message, exception_type |
 | Timeframe | Pass | `from` / `to` on `last_seen` |
-| Scale (tens of thousands) | **Unvalidated** | Not load-tested |
+| Scale (tens of thousands) | **Unvalidated** | Load harness exists (`go run ./cmd/sentry-lite-load`); results TBD per run |
 
 ---
 
