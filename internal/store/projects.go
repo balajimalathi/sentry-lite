@@ -3,12 +3,14 @@ package store
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"regexp"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
 type CreatedProject struct {
@@ -89,30 +91,28 @@ func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string
 	allowedOrigins = normalizeOrigins(allowedOrigins)
 	originsJSON := encodeOriginsJSON(allowedOrigins)
 
-	var orgID int64
-	err := s.DB.QueryRowContext(ctx, `SELECT id FROM organizations ORDER BY id ASC LIMIT 1`).Scan(&orgID)
-	if err == sql.ErrNoRows {
-		res, err := s.DB.ExecContext(ctx, `INSERT INTO organizations (slug, name) VALUES (?, ?)`, "default", "Default")
-		if err != nil {
+	var org Organization
+	err := s.DB.WithContext(ctx).Order("id ASC").First(&org).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		org = Organization{Slug: "default", Name: "Default"}
+		if err := s.DB.WithContext(ctx).Create(&org).Error; err != nil {
 			return nil, err
 		}
-		orgID, _ = res.LastInsertId()
 	} else if err != nil {
 		return nil, err
 	}
 
-	// Ensure unique slug
 	base := slug
 	for i := 0; i < 50; i++ {
 		candidate := base
 		if i > 0 {
 			candidate = fmt.Sprintf("%s-%d", base, i+1)
 		}
-		var exists int
-		if err := s.DB.QueryRowContext(ctx, `SELECT COUNT(*) FROM projects WHERE slug = ?`, candidate).Scan(&exists); err != nil {
+		var n int64
+		if err := s.DB.WithContext(ctx).Model(&ProjectRow{}).Where("slug = ?", candidate).Count(&n).Error; err != nil {
 			return nil, err
 		}
-		if exists == 0 {
+		if n == 0 {
 			slug = candidate
 			break
 		}
@@ -127,37 +127,38 @@ func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string
 		return nil, err
 	}
 
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
-	res, err := tx.ExecContext(ctx,
-		`INSERT INTO projects (organization_id, slug, name, allowed_origins) VALUES (?, ?, ?, ?)`,
-		orgID, slug, name, originsJSON,
-	)
-	if err != nil {
-		return nil, err
-	}
-	projectID, _ := res.LastInsertId()
-	if _, err := tx.ExecContext(ctx,
-		`INSERT INTO project_keys (project_id, public_key, secret_key) VALUES (?, ?, ?)`,
-		projectID, pub, sec,
-	); err != nil {
-		return nil, err
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
-
+	var projectID int64
 	var createdAt string
-	_ = s.DB.QueryRowContext(ctx, `SELECT created_at FROM projects WHERE id = ?`, projectID).Scan(&createdAt)
+	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		proj := ProjectRow{
+			OrganizationID: org.ID,
+			Slug:           slug,
+			Name:           name,
+			AllowedOrigins: originsJSON,
+		}
+		if err := tx.Create(&proj).Error; err != nil {
+			return err
+		}
+		projectID = proj.ID
+		createdAt = proj.CreatedAt
+		key := ProjectKeyRow{
+			ProjectID: proj.ID,
+			PublicKey: pub,
+			SecretKey: sec,
+		}
+		return tx.Create(&key).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	if createdAt == "" {
+		_ = s.DB.WithContext(ctx).Model(&ProjectRow{}).Select("created_at").Where("id = ?", projectID).Scan(&createdAt).Error
+	}
 	if publicHost == "" {
 		publicHost = "http://localhost:8080"
 	}
 	publicHost = strings.TrimRight(publicHost, "/")
-	// DSN host without scheme for classic form, but Sentry accepts full URL style we already use
 	host := strings.TrimPrefix(publicHost, "http://")
 	host = strings.TrimPrefix(host, "https://")
 	scheme := "http"
@@ -183,17 +184,15 @@ func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string
 // An empty slice means allow any Origin (Sentry-like).
 // A nil slice with nil error means the project does not exist.
 func (s *Store) ProjectAllowedOrigins(ctx context.Context, projectID int64) ([]string, error) {
-	var raw string
-	err := s.DB.QueryRowContext(ctx,
-		`SELECT allowed_origins FROM projects WHERE id = ?`, projectID,
-	).Scan(&raw)
-	if err == sql.ErrNoRows {
+	var row ProjectRow
+	err := s.DB.WithContext(ctx).Select("allowed_origins").First(&row, projectID).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return decodeOriginsJSON(raw), nil
+	return decodeOriginsJSON(row.AllowedOrigins), nil
 }
 
 type Facets struct {
@@ -237,7 +236,6 @@ func (s *Store) ListFacets(ctx context.Context, projectID int64) (*Facets, error
 	if err != nil {
 		return nil, err
 	}
-	// Also include release values from event_tags if not in releases table
 	extraRelQ := `SELECT DISTINCT value FROM event_tags WHERE key = 'release'`
 	extraArgs := []any{}
 	if projectID > 0 {
@@ -268,24 +266,19 @@ func (s *Store) ListFacets(ctx context.Context, projectID int64) (*Facets, error
 	return out, nil
 }
 
-func scanStringCol(ctx context.Context, db *sql.DB, query string, args ...any) ([]string, error) {
-	rows, err := db.QueryContext(ctx, query, args...)
-	if err != nil {
+func scanStringCol(ctx context.Context, db *gorm.DB, query string, args ...any) ([]string, error) {
+	var out []string
+	if err := db.WithContext(ctx).Raw(query, args...).Scan(&out).Error; err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []string
-	for rows.Next() {
-		var v string
-		if err := rows.Scan(&v); err != nil {
-			return nil, err
-		}
+	filtered := make([]string, 0, len(out))
+	for _, v := range out {
 		if v != "" {
-			out = append(out, v)
+			filtered = append(filtered, v)
 		}
 	}
-	if out == nil {
-		out = []string{}
+	if filtered == nil {
+		filtered = []string{}
 	}
-	return out, rows.Err()
+	return filtered, nil
 }
