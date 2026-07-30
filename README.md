@@ -41,15 +41,18 @@ Open `http://localhost:5173` (proxies `/api` to the Go server).
 
 ### 4. Production-style (Compose)
 
-Start Redpanda first, then the app:
+Start Redpanda first, then the app. Set `ADMIN_TOKEN` (required by Compose):
 
 ```bash
 docker compose -f docker-compose.redpanda.yml up -d
 cd web && bun run build && cd ..
+export ADMIN_TOKEN="$(openssl rand -hex 32)"
 docker compose up --build
 ```
 
-UI + API: `http://localhost:8080`
+The app listens on `127.0.0.1:8080` only. Put **host nginx** (on the VPS, not in Docker) in front for TLS and public access — see [Security](#security).
+
+UI + API via nginx (or locally `http://127.0.0.1:8080`).
 
 The app joins the external `sentry-lite-net` network created by the Redpanda stack and connects via `redpanda:9092`.
 
@@ -182,8 +185,44 @@ Keys: `↑`/`↓` select service · `j`/`k` scroll · `1–4` / `tab` shortcuts 
 Release CLI:
 
 ```bash
-go run ./cmd/sentry-lite-release -version=1.2.3 [-project=1]
+go run ./cmd/sentry-lite-release -version=1.2.3 [-project=1] [-token="$ADMIN_TOKEN"]
 ```
+
+Or set `SENTRY_LITE_TOKEN`.
+
+## Security
+
+Management UI and `/api/internal/*` are protected by a shared `ADMIN_TOKEN` when that env var is set. Ingest (`DSN` public key) and cron check-ins (URL token) stay separate.
+
+- **Local / TUI:** leave `ADMIN_TOKEN` empty — API stays open and the process logs a warning.
+- **Any non-local deploy:** set a long random `ADMIN_TOKEN`. Sign in to the UI with that token (stored in `sessionStorage`).
+
+### Host nginx (VPS — not in Docker)
+
+Bind the container to localhost (`127.0.0.1:8080` in Compose). Terminate TLS and proxy on the VPS with nginx (or Caddy). Example:
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name sentry.example.com;
+
+    # ssl_certificate     /etc/letsencrypt/live/sentry.example.com/fullchain.pem;
+    # ssl_certificate_key /etc/letsencrypt/live/sentry.example.com/privkey.pem;
+
+    client_max_body_size 32m;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+SDKs use the public hostname in the DSN; nginx forwards envelopes to the app, which still validates the project public key. Do not put nginx inside the Compose stack for this setup.
 
 ## Env vars
 
@@ -197,6 +236,8 @@ go run ./cmd/sentry-lite-release -version=1.2.3 [-project=1]
 | `CORS_ORIGINS` | `http://localhost:5173,http://localhost:3000` |
 | `WEB_DIST` | `./web/dist` |
 | `PUBLIC_URL` | `http://localhost:8080` (issue links in alerts) |
+| `ADMIN_TOKEN` | _(empty = management API open; required by Compose)_ |
+| `SENTRY_LITE_TOKEN` | _(release CLI; same value as `ADMIN_TOKEN`)_ |
 | `ALERT_SMTP` | _(empty = email alerts disabled)_ |
 | `ALERT_FROM` | `sentry-lite@localhost` |
 

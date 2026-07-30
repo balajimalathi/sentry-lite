@@ -1,3 +1,5 @@
+import { authHeaders, clearAdminToken } from '@/lib/auth'
+
 export type Project = {
   id: number
   slug: string
@@ -149,14 +151,33 @@ export type AlertRule = {
   created_at: string
 }
 
+function handleUnauthorized(res: Response) {
+  if (res.status !== 401) return
+  clearAdminToken()
+  if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+    window.location.assign('/login')
+  }
+}
+
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers)
+  const auth = authHeaders() as Record<string, string>
+  if (auth.Authorization) {
+    headers.set('Authorization', auth.Authorization)
+  }
+  const res = await fetch(path, { ...init, headers })
+  handleUnauthorized(res)
+  return res
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path)
+  const res = await apiFetch(path)
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   return res.json()
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -189,7 +210,7 @@ export const api = {
     get<{ issue: Issue; latest_event: Event | null }>(`/api/internal/issues/${id}`),
   events: (id: string) => get<Event[]>(`/api/internal/issues/${id}/events`),
   updateStatus: async (id: number, status: string) => {
-    const res = await fetch(`/api/internal/issues/${id}`, {
+    const res = await apiFetch(`/api/internal/issues/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
@@ -198,7 +219,7 @@ export const api = {
     return res.json() as Promise<Issue>
   },
   updateAssignee: async (id: number, assignee: string) => {
-    const res = await fetch(`/api/internal/issues/${id}`, {
+    const res = await apiFetch(`/api/internal/issues/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ assignee }),
@@ -257,7 +278,7 @@ export const api = {
     environment?: string
   }) => post<CronMonitor>('/api/internal/crons', body),
   deleteCron: async (id: number) => {
-    const res = await fetch(`/api/internal/crons/${id}`, { method: 'DELETE' })
+    const res = await apiFetch(`/api/internal/crons/${id}`, { method: 'DELETE' })
     if (!res.ok) throw new Error(`${res.status}`)
   },
 }

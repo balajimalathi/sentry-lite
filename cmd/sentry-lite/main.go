@@ -79,7 +79,7 @@ func main() {
 	ingestHandler := &ingest.Handler{Store: st, Bus: b}
 	ingestHandler.Routes(r)
 
-	apiHandler := &api.Handler{Store: st, PublicURL: cfg.PublicURL}
+	apiHandler := &api.Handler{Store: st, PublicURL: cfg.PublicURL, AdminToken: cfg.AdminToken}
 	apiHandler.Routes(r)
 
 	serveSPA(r, cfg.WebDist)
@@ -93,6 +93,11 @@ func main() {
 	go func() {
 		log.Printf("listening on %s", cfg.HTTPAddr)
 		log.Printf("seed DSN: http://%s@localhost%s/1", store.SeedPublicKey, normalizePort(cfg.HTTPAddr))
+		if cfg.AdminToken == "" {
+			log.Printf("WARNING: ADMIN_TOKEN is unset — /api/internal/* and the UI are open; set ADMIN_TOKEN for any non-local deploy")
+		} else {
+			log.Printf("admin auth enabled for /api/internal/*")
+		}
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}

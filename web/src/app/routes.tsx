@@ -1,6 +1,8 @@
 import { createBrowserRouter, Outlet } from 'react-router-dom'
 import { NuqsAdapter } from 'nuqs/adapters/react-router/v7'
+import { RequireAuth } from '@/components/require-auth'
 import RootLayout from './layout'
+import LoginPage from './login/page'
 import DashboardPage from './page'
 import ProjectsPage from './projects/page'
 import IssuesPage from './issues/page'
@@ -28,23 +30,32 @@ export const router = createBrowserRouter([
     errorElement: <StandaloneErrorPage />,
     children: [
       {
-        path: '/',
-        element: <RootLayout />,
+        path: '/login',
+        element: <LoginPage />,
+      },
+      {
+        element: <RequireAuth />,
         children: [
           {
-            errorElement: <RouteErrorPage />,
+            path: '/',
+            element: <RootLayout />,
             children: [
-              { index: true, element: <DashboardPage /> },
-              { path: 'projects', element: <ProjectsPage /> },
-              { path: 'issues', element: <IssuesPage /> },
-              { path: 'issues/:id', element: <IssueDetailPage /> },
-              { path: 'performance', element: <PerformancePage /> },
-              { path: 'performance/:name', element: <TransactionDetailPage /> },
-              { path: 'traces/:traceId', element: <TracePage /> },
-              { path: 'crons', element: <CronsPage /> },
-              { path: 'releases', element: <ReleasesPage /> },
-              { path: 'alerts', element: <AlertsPage /> },
-              { path: '*', element: <NotFoundPage /> },
+              {
+                errorElement: <RouteErrorPage />,
+                children: [
+                  { index: true, element: <DashboardPage /> },
+                  { path: 'projects', element: <ProjectsPage /> },
+                  { path: 'issues', element: <IssuesPage /> },
+                  { path: 'issues/:id', element: <IssueDetailPage /> },
+                  { path: 'performance', element: <PerformancePage /> },
+                  { path: 'performance/:name', element: <TransactionDetailPage /> },
+                  { path: 'traces/:traceId', element: <TracePage /> },
+                  { path: 'crons', element: <CronsPage /> },
+                  { path: 'releases', element: <ReleasesPage /> },
+                  { path: 'alerts', element: <AlertsPage /> },
+                  { path: '*', element: <NotFoundPage /> },
+                ],
+              },
             ],
           },
         ],

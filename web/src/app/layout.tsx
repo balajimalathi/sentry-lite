@@ -1,10 +1,19 @@
-import { NavLink, Outlet } from 'react-router-dom'
+import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { ModeToggle } from '@/components/mode-toggle'
-import { buttonVariants } from '@/components/ui/button'
+import { Button, buttonVariants } from '@/components/ui/button'
 import { Separator } from '@/components/ui/separator'
+import { clearAdminToken, getAdminToken } from '@/lib/auth'
 import { cn } from '@/lib/utils'
 
 export default function RootLayout() {
+  const navigate = useNavigate()
+  const hasToken = Boolean(getAdminToken())
+
+  function logout() {
+    clearAdminToken()
+    navigate('/login', { replace: true })
+  }
+
   return (
     <div className="flex min-h-svh w-full flex-col gap-6 px-6 py-5 pb-12">
       <header className="flex flex-col gap-4">
@@ -110,6 +119,11 @@ export default function RootLayout() {
                 Alerts
               </NavLink>
             </nav>
+            {hasToken ? (
+              <Button variant="ghost" size="sm" onClick={logout}>
+                Log out
+              </Button>
+            ) : null}
             <ModeToggle />
           </div>
         </div>

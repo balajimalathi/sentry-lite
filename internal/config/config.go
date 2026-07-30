@@ -16,6 +16,7 @@ type Config struct {
 	PublicURL       string
 	AlertSMTP       string
 	AlertFrom       string
+	AdminToken      string
 }
 
 func Load() Config {
@@ -32,6 +33,7 @@ func Load() Config {
 		PublicURL:       env("PUBLIC_URL", "http://localhost:8080"),
 		AlertSMTP:       env("ALERT_SMTP", ""),
 		AlertFrom:       env("ALERT_FROM", "sentry-lite@localhost"),
+		AdminToken:      env("ADMIN_TOKEN", ""),
 	}
 }
 

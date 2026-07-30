@@ -9,43 +9,50 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/skndan/sentry-lite/internal/alerts"
+	"github.com/skndan/sentry-lite/internal/auth"
 	"github.com/skndan/sentry-lite/internal/store"
 )
 
 type Handler struct {
-	Store     *store.Store
-	PublicURL string
+	Store      *store.Store
+	PublicURL  string
+	AdminToken string
 }
 
 func (h *Handler) Routes(r chi.Router) {
-	r.Get("/api/internal/projects", h.ListProjects)
-	r.Post("/api/internal/projects", h.CreateProject)
-	r.Get("/api/internal/facets", h.ListFacets)
-	r.Get("/api/internal/issues", h.ListIssues)
-	r.Get("/api/internal/issues/{id}", h.GetIssue)
-	r.Get("/api/internal/issues/{id}/events", h.ListEvents)
-	r.Patch("/api/internal/issues/{id}", h.UpdateIssue)
+	r.Route("/api/internal", func(r chi.Router) {
+		if h.AdminToken != "" {
+			r.Use(auth.RequireAdmin(h.AdminToken))
+		}
+		r.Get("/projects", h.ListProjects)
+		r.Post("/projects", h.CreateProject)
+		r.Get("/facets", h.ListFacets)
+		r.Get("/issues", h.ListIssues)
+		r.Get("/issues/{id}", h.GetIssue)
+		r.Get("/issues/{id}/events", h.ListEvents)
+		r.Patch("/issues/{id}", h.UpdateIssue)
 
-	r.Get("/api/internal/releases", h.ListReleases)
-	r.Post("/api/internal/releases", h.CreateRelease)
+		r.Get("/releases", h.ListReleases)
+		r.Post("/releases", h.CreateRelease)
 
-	r.Get("/api/internal/alerts", h.ListAlerts)
-	r.Post("/api/internal/alerts", h.CreateAlert)
+		r.Get("/alerts", h.ListAlerts)
+		r.Post("/alerts", h.CreateAlert)
 
-	r.Get("/api/internal/transactions", h.ListTransactions)
-	r.Get("/api/internal/transaction", h.GetTransaction)
-	r.Get("/api/internal/traces/{traceID}", h.GetTrace)
+		r.Get("/transactions", h.ListTransactions)
+		r.Get("/transaction", h.GetTransaction)
+		r.Get("/traces/{traceID}", h.GetTrace)
 
-	r.Get("/api/internal/crons", h.ListCrons)
-	r.Post("/api/internal/crons", h.CreateCron)
-	r.Patch("/api/internal/crons/{id}", h.UpdateCron)
-	r.Delete("/api/internal/crons/{id}", h.DeleteCron)
+		r.Get("/crons", h.ListCrons)
+		r.Post("/crons", h.CreateCron)
+		r.Patch("/crons/{id}", h.UpdateCron)
+		r.Delete("/crons/{id}", h.DeleteCron)
 
-	// Heartbeat check-in (token-authenticated)
+		r.Get("/meta", h.Meta)
+	})
+
+	// Heartbeat check-in (URL token-authenticated; not admin token)
 	r.Post("/api/cron/check-in/{token}", h.CronCheckIn)
 	r.Post("/api/cron/check-in/{token}/", h.CronCheckIn)
-
-	r.Get("/api/internal/meta", h.Meta)
 }
 
 func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {

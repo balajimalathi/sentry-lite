@@ -15,9 +15,10 @@ func main() {
 	version := flag.String("version", "", "release version (required)")
 	ref := flag.String("ref", "", "git ref")
 	url := flag.String("url", "", "release URL")
+	token := flag.String("token", env("SENTRY_LITE_TOKEN", ""), "admin token (Authorization: Bearer)")
 	flag.Parse()
 	if *version == "" {
-		fmt.Fprintln(os.Stderr, "usage: sentry-lite-release -version=1.2.3 [-project=1] [-ref=abc] [-url=...]")
+		fmt.Fprintln(os.Stderr, "usage: sentry-lite-release -version=1.2.3 [-project=1] [-token=...]")
 		os.Exit(2)
 	}
 	body, _ := json.Marshal(map[string]any{
@@ -26,7 +27,16 @@ func main() {
 		"ref":        *ref,
 		"url":        *url,
 	})
-	res, err := http.Post(*apiURL+"/api/internal/releases", "application/json", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, *apiURL+"/api/internal/releases", bytes.NewReader(body))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if *token != "" {
+		req.Header.Set("Authorization", "Bearer "+*token)
+	}
+	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
