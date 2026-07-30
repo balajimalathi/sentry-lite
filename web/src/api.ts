@@ -1,4 +1,9 @@
-import { authHeaders, clearAdminToken } from '@/lib/auth'
+import {
+  authHeaders,
+  clearAdminToken,
+  isSessionExpired,
+  touchSession,
+} from '@/lib/auth'
 
 export type Project = {
   id: number
@@ -161,10 +166,22 @@ function handleUnauthorized(res: Response) {
 }
 
 async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  if (isSessionExpired()) {
+    clearAdminToken()
+    if (
+      typeof window !== 'undefined' &&
+      !window.location.pathname.startsWith('/login')
+    ) {
+      window.location.assign('/login')
+    }
+    return new Response(null, { status: 401, statusText: 'Session expired' })
+  }
+
   const headers = new Headers(init?.headers)
   const auth = authHeaders() as Record<string, string>
   if (auth.Authorization) {
     headers.set('Authorization', auth.Authorization)
+    touchSession()
   }
   const res = await fetch(path, { ...init, headers })
   handleUnauthorized(res)

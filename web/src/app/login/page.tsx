@@ -1,9 +1,10 @@
-import { useState, type FormEvent } from 'react'
+import { useEffect, useState, type FormEvent } from 'react'
 import { Navigate, useNavigate } from 'react-router-dom'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
+  clearAdminToken,
   getAdminToken,
   setAdminToken,
   validateAdminToken,
@@ -11,12 +12,44 @@ import {
 
 export default function LoginPage() {
   const navigate = useNavigate()
-  const existing = getAdminToken()
+  const [ready, setReady] = useState(false)
+  const [authed, setAuthed] = useState(false)
   const [token, setToken] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
 
-  if (existing) {
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      const existing = getAdminToken()
+      if (!existing) {
+        if (!cancelled) setReady(true)
+        return
+      }
+      const ok = await validateAdminToken(existing)
+      if (cancelled) return
+      if (!ok) {
+        clearAdminToken()
+        setReady(true)
+        return
+      }
+      setAuthed(true)
+      setReady(true)
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  if (!ready) {
+    return (
+      <div className="flex min-h-svh items-center justify-center text-sm text-muted-foreground">
+        Loading…
+      </div>
+    )
+  }
+
+  if (authed) {
     return <Navigate to="/" replace />
   }
 
@@ -27,7 +60,7 @@ export default function LoginPage() {
     try {
       const trimmed = token.trim()
       if (!trimmed) {
-        setError('Enter the admin token')
+        setError('Enter the gateway token')
         return
       }
       const ok = await validateAdminToken(trimmed)
@@ -49,13 +82,14 @@ export default function LoginPage() {
       <div className="space-y-1">
         <h1 className="font-mono text-lg font-bold tracking-tight">sentry-lite</h1>
         <p className="text-sm text-muted-foreground">
-          Enter the <span className="font-mono">ADMIN_TOKEN</span> to open the
-          triage UI.
+          Enter the gateway token (
+          <span className="font-mono">ADMIN_TOKEN</span>) to open the triage UI.
+          Session expires after 1 hour of inactivity.
         </p>
       </div>
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
         <div className="space-y-2">
-          <Label htmlFor="token">Admin token</Label>
+          <Label htmlFor="token">Gateway token</Label>
           <Input
             id="token"
             type="password"

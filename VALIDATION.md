@@ -8,8 +8,8 @@
 
 | Component | Status |
 |-----------|--------|
-| Redpanda | `docker compose -f docker-compose.redpanda.yml` — healthy |
-| API | `./bin/sentry-lite` on `:8080`, `REDPANDA_BROKERS=localhost:19092` |
+| Redpanda | `docker compose -f docker-compose.redpanda.yml` — healthy; Kafka internal-only (`redpanda:9092` on `sentry-lite-net`) |
+| API | `./bin/sentry-lite` on `:8080` (Compose: `REDPANDA_BROKERS=redpanda:9092`; local host publish needed for bare-metal) |
 | UI | `bun run dev` on `http://127.0.0.1:5173` |
 | Seed DSN | `http://a1b2c3d4e5f6789012345678abcdef01@localhost:8080/1` |
 | Smoke | `examples/node-sdk` (`@sentry/node`) |
