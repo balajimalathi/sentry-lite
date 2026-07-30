@@ -201,19 +201,22 @@ func (s *Store) GetTransactionDetail(ctx context.Context, projectID int64, name 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var out []Transaction
 	for rows.Next() {
 		t, err := scanTransaction(rows)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
 		out = append(out, *t)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, err
 	}
+	rows.Close()
+
 	for i := range out {
 		spans, err := s.ListSpans(ctx, out[i].EventID)
 		if err != nil {
@@ -256,18 +259,21 @@ func (s *Store) GetTrace(ctx context.Context, traceID string) (*TraceDetail, err
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	var txs []Transaction
 	for rows.Next() {
 		t, err := scanTransaction(rows)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
 		txs = append(txs, *t)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return nil, err
 	}
+	rows.Close()
+
 	for i := range txs {
 		spans, err := s.ListSpans(ctx, txs[i].EventID)
 		if err != nil {
@@ -323,18 +329,20 @@ func (s *Store) RecomputeTransactionStats(ctx context.Context, windowSec int) er
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 	var projectIDs []int64
 	for rows.Next() {
 		var id int64
 		if err := rows.Scan(&id); err != nil {
+			rows.Close()
 			return err
 		}
 		projectIDs = append(projectIDs, id)
 	}
 	if err := rows.Err(); err != nil {
+		rows.Close()
 		return err
 	}
+	rows.Close()
 
 	for _, pid := range projectIDs {
 		summaries, err := s.computeTransactionSummaries(ctx, pid, from)

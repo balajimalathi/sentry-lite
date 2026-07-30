@@ -240,14 +240,25 @@ func (s *Store) EvaluateCronMonitors(ctx context.Context) ([]CronStatusChange, e
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	var changes []CronStatusChange
+	var monitors []CronMonitor
 	for rows.Next() {
 		m, err := scanCronMonitor(rows)
 		if err != nil {
+			rows.Close()
 			return nil, err
 		}
+		monitors = append(monitors, *m)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return nil, err
+	}
+	rows.Close()
+
+	var changes []CronStatusChange
+	for i := range monitors {
+		m := &monitors[i]
 		if m.NextExpectedAt == nil {
 			continue
 		}
@@ -262,8 +273,6 @@ func (s *Store) EvaluateCronMonitors(ctx context.Context) ([]CronStatusChange, e
 			newStatus = "missed"
 		} else if now.After(next) {
 			newStatus = "late"
-		} else if prev == "late" || prev == "missed" {
-			// still waiting for check-in but within schedule — keep as-is until check-in resets
 		}
 		if newStatus != prev && (newStatus == "late" || newStatus == "missed") {
 			_, err = s.DB.ExecContext(ctx, `UPDATE cron_monitors SET status = ? WHERE id = ?`, newStatus, m.ID)
@@ -274,7 +283,7 @@ func (s *Store) EvaluateCronMonitors(ctx context.Context) ([]CronStatusChange, e
 			changes = append(changes, CronStatusChange{Monitor: *m, PrevStatus: prev, NewStatus: newStatus})
 		}
 	}
-	return changes, rows.Err()
+	return changes, nil
 }
 
 func parseFlexibleTime(s string) (time.Time, error) {

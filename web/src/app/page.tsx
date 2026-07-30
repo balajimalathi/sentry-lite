@@ -6,6 +6,15 @@ import { api, formatTime } from '@/api'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import {
   Empty,
   EmptyDescription,
   EmptyHeader,
@@ -36,6 +45,7 @@ function slugify(name: string) {
 
 export default function HomePage() {
   const qc = useQueryClient()
+  const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [slug, setSlug] = useState('')
   const [slugTouched, setSlugTouched] = useState(false)
@@ -59,6 +69,7 @@ export default function HomePage() {
       setSlug('')
       setSlugTouched(false)
       setFormError('')
+      setOpen(false)
       void qc.invalidateQueries({ queryKey: ['projects'] })
     },
     onError: (e) => setFormError(String(e)),
@@ -85,59 +96,69 @@ export default function HomePage() {
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <h1 className="font-heading text-2xl font-medium tracking-tight">
-          Projects
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Create a project, copy its DSN into your SDK. Environment, release, and
-          tags come from the SDK on each event — not from this UI.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <h1 className="font-heading text-2xl font-medium tracking-tight">
+            Projects
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Create a project, copy its DSN into your SDK. Environment, release,
+            and tags come from the SDK on each event — not from this UI.
+          </p>
+        </div>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger render={<Button />}>New project</DialogTrigger>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>New project</DialogTitle>
+              <DialogDescription>
+                A DSN is generated on create for your Sentry SDK.
+              </DialogDescription>
+            </DialogHeader>
+            <form onSubmit={onCreate} className="flex flex-col gap-4">
+              <FieldGroup className="grid gap-3">
+                <Field>
+                  <FieldLabel htmlFor="project-name">Name</FieldLabel>
+                  <Input
+                    id="project-name"
+                    value={name}
+                    onChange={(e) => {
+                      const v = e.target.value
+                      setName(v)
+                      if (!slugTouched) setSlug(slugify(v))
+                    }}
+                    placeholder="Backend API"
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="project-slug">Slug</FieldLabel>
+                  <Input
+                    id="project-slug"
+                    value={slug}
+                    onChange={(e) => {
+                      setSlugTouched(true)
+                      setSlug(e.target.value)
+                    }}
+                    placeholder="backend-api"
+                  />
+                </Field>
+              </FieldGroup>
+              {formError && (
+                <Alert variant="destructive">
+                  <AlertCircleIcon />
+                  <AlertTitle>Create failed</AlertTitle>
+                  <AlertDescription>{formError}</AlertDescription>
+                </Alert>
+              )}
+              <DialogFooter>
+                <Button type="submit" disabled={createMutation.isPending}>
+                  Create
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
       </div>
-
-      <form onSubmit={onCreate}>
-        <FieldGroup className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
-          <Field>
-            <FieldLabel htmlFor="project-name">Name</FieldLabel>
-            <Input
-              id="project-name"
-              value={name}
-              onChange={(e) => {
-                const v = e.target.value
-                setName(v)
-                if (!slugTouched) setSlug(slugify(v))
-              }}
-              placeholder="Backend API"
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="project-slug">Slug</FieldLabel>
-            <Input
-              id="project-slug"
-              value={slug}
-              onChange={(e) => {
-                setSlugTouched(true)
-                setSlug(e.target.value)
-              }}
-              placeholder="backend-api"
-            />
-          </Field>
-          <Field className="justify-end">
-            <FieldLabel className="sr-only">Create</FieldLabel>
-            <Button type="submit" disabled={createMutation.isPending}>
-              New project
-            </Button>
-          </Field>
-        </FieldGroup>
-      </form>
-
-      {formError && (
-        <Alert variant="destructive">
-          <AlertCircleIcon />
-          <AlertTitle>Create failed</AlertTitle>
-          <AlertDescription>{formError}</AlertDescription>
-        </Alert>
-      )}
 
       {createdDsn && (
         <Alert>
@@ -167,7 +188,7 @@ export default function HomePage() {
             </EmptyMedia>
             <EmptyTitle>No projects yet</EmptyTitle>
             <EmptyDescription>
-              Create a project above, then point your SDK at the DSN.
+              Create a project, then point your SDK at the DSN.
             </EmptyDescription>
           </EmptyHeader>
         </Empty>

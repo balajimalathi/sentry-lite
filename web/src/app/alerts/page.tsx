@@ -4,6 +4,15 @@ import { AlertCircleIcon } from 'lucide-react'
 import { api } from '@/api'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import {
@@ -26,6 +35,7 @@ import {
 export default function AlertsPage() {
   const qc = useQueryClient()
   const [projectId, setProjectId] = useState('')
+  const [open, setOpen] = useState(false)
   const [name, setName] = useState('New issue alert')
   const [trigger, setTrigger] = useState('new_issue')
   const [channel, setChannel] = useState('webhook')
@@ -34,6 +44,7 @@ export default function AlertsPage() {
   const [chatId, setChatId] = useState('')
   const [threshold, setThreshold] = useState('10')
   const [error, setError] = useState('')
+  const [formError, setFormError] = useState('')
 
   const projectsQuery = useQuery({
     queryKey: ['projects'],
@@ -73,10 +84,12 @@ export default function AlertsPage() {
       setTarget('')
       setBotToken('')
       setChatId('')
+      setFormError('')
       setError('')
+      setOpen(false)
       void qc.invalidateQueries({ queryKey: ['alerts', projectId] })
     },
-    onError: (e) => setError(String(e)),
+    onError: (e) => setFormError(String(e)),
   })
 
   function onCreate(e: FormEvent) {
@@ -93,12 +106,151 @@ export default function AlertsPage() {
 
   return (
     <section className="flex flex-col gap-4">
-      <h1 className="font-heading text-2xl font-medium tracking-tight">Alerts</h1>
-      <p className="text-sm text-muted-foreground">
-        Rules for new issues, regressions, error volume, and missed crons.
-        Channels: Slack webhook URL, email (ALERT_SMTP), signed webhook, or
-        Telegram (bot token + chat id — sends a connect sample on create).
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <h1 className="font-heading text-2xl font-medium tracking-tight">
+            Alerts
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Rules for new issues, regressions, error volume, and missed crons.
+            Channels: Slack, email, webhook, or Telegram.
+          </p>
+        </div>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger
+            render={<Button disabled={!projectId} />}
+          >
+            Create rule
+          </DialogTrigger>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Create alert rule</DialogTitle>
+              <DialogDescription>
+                Delivered via Slack, email, webhook, or Telegram for the selected
+                project.
+              </DialogDescription>
+            </DialogHeader>
+            <form onSubmit={onCreate} className="flex flex-col gap-4">
+              <FieldGroup className="grid gap-3 sm:grid-cols-2">
+                <Field>
+                  <FieldLabel>Name</FieldLabel>
+                  <Input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel>Trigger</FieldLabel>
+                  <Select
+                    items={[
+                      { label: 'New issue', value: 'new_issue' },
+                      { label: 'Regressed', value: 'regressed_issue' },
+                      { label: 'Error volume', value: 'error_volume' },
+                      { label: 'Cron missed', value: 'cron_missed' },
+                    ]}
+                    value={trigger}
+                    onValueChange={(v) => setTrigger(String(v ?? 'new_issue'))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="new_issue">New issue</SelectItem>
+                        <SelectItem value="regressed_issue">
+                          Regressed
+                        </SelectItem>
+                        <SelectItem value="error_volume">
+                          Error volume
+                        </SelectItem>
+                        <SelectItem value="cron_missed">Cron missed</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field>
+                  <FieldLabel>Channel</FieldLabel>
+                  <Select
+                    items={[
+                      { label: 'Webhook', value: 'webhook' },
+                      { label: 'Slack', value: 'slack' },
+                      { label: 'Email', value: 'email' },
+                      { label: 'Telegram', value: 'telegram' },
+                    ]}
+                    value={channel}
+                    onValueChange={(v) => setChannel(String(v ?? 'webhook'))}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        <SelectItem value="webhook">Webhook</SelectItem>
+                        <SelectItem value="slack">Slack</SelectItem>
+                        <SelectItem value="email">Email</SelectItem>
+                        <SelectItem value="telegram">Telegram</SelectItem>
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </Field>
+                {channel === 'telegram' ? (
+                  <>
+                    <Field>
+                      <FieldLabel>Bot token</FieldLabel>
+                      <Input
+                        value={botToken}
+                        onChange={(e) => setBotToken(e.target.value)}
+                        placeholder="123456:ABC-DEF..."
+                      />
+                    </Field>
+                    <Field>
+                      <FieldLabel>Chat ID</FieldLabel>
+                      <Input
+                        value={chatId}
+                        onChange={(e) => setChatId(e.target.value)}
+                        placeholder="123456789"
+                      />
+                    </Field>
+                  </>
+                ) : (
+                  <Field>
+                    <FieldLabel>Target (URL / email)</FieldLabel>
+                    <Input
+                      value={target}
+                      onChange={(e) => setTarget(e.target.value)}
+                      placeholder="https://hooks.slack.com/... or you@example.com"
+                    />
+                  </Field>
+                )}
+                <Field>
+                  <FieldLabel>Volume threshold</FieldLabel>
+                  <Input
+                    value={threshold}
+                    onChange={(e) => setThreshold(e.target.value)}
+                    placeholder="10"
+                  />
+                </Field>
+              </FieldGroup>
+              {formError && (
+                <Alert variant="destructive">
+                  <AlertCircleIcon />
+                  <AlertTitle>Create failed</AlertTitle>
+                  <AlertDescription>{formError}</AlertDescription>
+                </Alert>
+              )}
+              <DialogFooter>
+                <Button
+                  type="submit"
+                  disabled={createMutation.isPending || !projectId}
+                >
+                  Create
+                </Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </div>
+
       {error && (
         <Alert variant="destructive">
           <AlertCircleIcon />
@@ -107,129 +259,29 @@ export default function AlertsPage() {
         </Alert>
       )}
 
-      <form onSubmit={onCreate} className="flex flex-col gap-3">
-        <FieldGroup className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <Field>
-            <FieldLabel>Project</FieldLabel>
-            <Select
-              items={projectItems}
-              value={projectId || undefined}
-              onValueChange={(v) => setProjectId(v == null ? '' : String(v))}
-            >
-              <SelectTrigger>
-                <SelectValue placeholder="Select project" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {projectItems.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      {item.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field>
-            <FieldLabel>Name</FieldLabel>
-            <Input value={name} onChange={(e) => setName(e.target.value)} />
-          </Field>
-          <Field>
-            <FieldLabel>Trigger</FieldLabel>
-            <Select
-              items={[
-                { label: 'New issue', value: 'new_issue' },
-                { label: 'Regressed', value: 'regressed_issue' },
-                { label: 'Error volume', value: 'error_volume' },
-                { label: 'Cron missed', value: 'cron_missed' },
-              ]}
-              value={trigger}
-              onValueChange={(v) => setTrigger(String(v ?? 'new_issue'))}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="new_issue">New issue</SelectItem>
-                  <SelectItem value="regressed_issue">Regressed</SelectItem>
-                  <SelectItem value="error_volume">Error volume</SelectItem>
-                  <SelectItem value="cron_missed">Cron missed</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          <Field>
-            <FieldLabel>Channel</FieldLabel>
-            <Select
-              items={[
-                { label: 'Webhook', value: 'webhook' },
-                { label: 'Slack', value: 'slack' },
-                { label: 'Email', value: 'email' },
-                { label: 'Telegram', value: 'telegram' },
-              ]}
-              value={channel}
-              onValueChange={(v) => setChannel(String(v ?? 'webhook'))}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  <SelectItem value="webhook">Webhook</SelectItem>
-                  <SelectItem value="slack">Slack</SelectItem>
-                  <SelectItem value="email">Email</SelectItem>
-                  <SelectItem value="telegram">Telegram</SelectItem>
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
-          {channel === 'telegram' ? (
-            <>
-              <Field>
-                <FieldLabel>Bot token</FieldLabel>
-                <Input
-                  value={botToken}
-                  onChange={(e) => setBotToken(e.target.value)}
-                  placeholder="123456:ABC-DEF..."
-                />
-              </Field>
-              <Field>
-                <FieldLabel>Chat ID</FieldLabel>
-                <Input
-                  value={chatId}
-                  onChange={(e) => setChatId(e.target.value)}
-                  placeholder="123456789"
-                />
-              </Field>
-            </>
-          ) : (
-            <Field>
-              <FieldLabel>Target (URL / email)</FieldLabel>
-              <Input
-                value={target}
-                onChange={(e) => setTarget(e.target.value)}
-                placeholder="https://hooks.slack.com/... or you@example.com"
-              />
-            </Field>
-          )}
-          <Field>
-            <FieldLabel>Volume threshold</FieldLabel>
-            <Input
-              value={threshold}
-              onChange={(e) => setThreshold(e.target.value)}
-              placeholder="10"
-            />
-          </Field>
-        </FieldGroup>
-        <Button
-          type="submit"
-          className="w-fit"
-          disabled={createMutation.isPending || !projectId}
-        >
-          Create rule
-        </Button>
-      </form>
+      <FieldGroup className="grid gap-3 sm:grid-cols-[1fr_auto]">
+        <Field>
+          <FieldLabel>Project</FieldLabel>
+          <Select
+            items={projectItems}
+            value={projectId || undefined}
+            onValueChange={(v) => setProjectId(v == null ? '' : String(v))}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Select project" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectGroup>
+                {projectItems.map((item) => (
+                  <SelectItem key={item.value} value={item.value}>
+                    {item.label}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            </SelectContent>
+          </Select>
+        </Field>
+      </FieldGroup>
 
       <Table>
         <TableHeader>

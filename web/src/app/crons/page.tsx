@@ -4,6 +4,15 @@ import { api, formatTime, type CronMonitor, type Project } from '@/api'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import {
@@ -40,10 +49,12 @@ export default function CronsPage() {
   const [projects, setProjects] = useState<Project[]>([])
   const [projectId, setProjectId] = useState('1')
   const [monitors, setMonitors] = useState<CronMonitor[]>([])
+  const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
   const [scheduleSec, setScheduleSec] = useState('60')
   const [graceSec, setGraceSec] = useState('30')
   const [error, setError] = useState('')
+  const [formError, setFormError] = useState('')
 
   async function load() {
     setMonitors(await api.crons(projectId))
@@ -74,10 +85,12 @@ export default function CronsPage() {
         grace_sec: Number(graceSec) || 30,
       })
       setName('')
+      setFormError('')
       setError('')
+      setOpen(false)
       await load()
     } catch (err) {
-      setError(String(err))
+      setFormError(String(err))
     }
   }
 
@@ -96,15 +109,74 @@ export default function CronsPage() {
   }))
 
   const publicBase =
-    typeof window !== 'undefined' ? window.location.origin.replace(':5173', ':8080') : ''
+    typeof window !== 'undefined'
+      ? window.location.origin.replace(':5173', ':8080')
+      : ''
 
   return (
     <section className="flex flex-col gap-4">
-      <h1 className="font-heading text-2xl font-medium tracking-tight">Crons</h1>
-      <p className="text-sm text-muted-foreground">
-        Register heartbeat monitors. POST to the check-in URL within the schedule
-        window or the monitor goes late/missed.
-      </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="flex flex-col gap-1">
+          <h1 className="font-heading text-2xl font-medium tracking-tight">
+            Crons
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Register heartbeat monitors. POST to the check-in URL within the
+            schedule window or the monitor goes late/missed.
+          </p>
+        </div>
+        <Dialog open={open} onOpenChange={setOpen}>
+          <DialogTrigger render={<Button />}>Create monitor</DialogTrigger>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Create monitor</DialogTitle>
+              <DialogDescription>
+                Expected frequency and grace period for project check-ins.
+              </DialogDescription>
+            </DialogHeader>
+            <form onSubmit={onCreate} className="flex flex-col gap-4">
+              <FieldGroup className="grid gap-3">
+                <Field>
+                  <FieldLabel htmlFor="cron-name">Name</FieldLabel>
+                  <Input
+                    id="cron-name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="nightly-backup"
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="schedule">Expected every (sec)</FieldLabel>
+                  <Input
+                    id="schedule"
+                    value={scheduleSec}
+                    onChange={(e) => setScheduleSec(e.target.value)}
+                  />
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="grace">Grace (sec)</FieldLabel>
+                  <Input
+                    id="grace"
+                    value={graceSec}
+                    onChange={(e) => setGraceSec(e.target.value)}
+                  />
+                </Field>
+              </FieldGroup>
+              {formError && (
+                <Alert variant="destructive">
+                  <AlertCircleIcon />
+                  <AlertTitle>Create failed</AlertTitle>
+                  <AlertDescription>{formError}</AlertDescription>
+                </Alert>
+              )}
+              <DialogFooter>
+                <Button type="submit">Create</Button>
+              </DialogFooter>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </div>
+
       {error && (
         <Alert variant="destructive">
           <AlertCircleIcon />
@@ -136,40 +208,6 @@ export default function CronsPage() {
           </Select>
         </Field>
       </FieldGroup>
-
-      <form onSubmit={onCreate}>
-        <FieldGroup className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Field>
-            <FieldLabel htmlFor="cron-name">Name</FieldLabel>
-            <Input
-              id="cron-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="nightly-backup"
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="schedule">Expected every (sec)</FieldLabel>
-            <Input
-              id="schedule"
-              value={scheduleSec}
-              onChange={(e) => setScheduleSec(e.target.value)}
-            />
-          </Field>
-          <Field>
-            <FieldLabel htmlFor="grace">Grace (sec)</FieldLabel>
-            <Input
-              id="grace"
-              value={graceSec}
-              onChange={(e) => setGraceSec(e.target.value)}
-            />
-          </Field>
-          <Field className="justify-end">
-            <FieldLabel className="sr-only">Create</FieldLabel>
-            <Button type="submit">Create monitor</Button>
-          </Field>
-        </FieldGroup>
-      </form>
 
       <Table>
         <TableHeader>
