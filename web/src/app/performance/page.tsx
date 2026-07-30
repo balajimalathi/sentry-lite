@@ -8,6 +8,7 @@ import { api, type TransactionSummary } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
 import { ListDataTableFilters } from '@/components/list-data-table-filters'
+import { PageHeader } from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useDataTable } from '@/hooks/use-data-table'
@@ -95,6 +96,14 @@ export default function PerformancePage() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} label="Project" />
         ),
+        cell: ({ row }) => {
+          const project = projects.find((p) => p.id === row.original.project_id)
+          return (
+            <span className="text-muted-foreground">
+              {project?.name ?? row.original.project_id}
+            </span>
+          )
+        },
         filterFn: (row, _id, value) => {
           const selected = Array.isArray(value)
             ? value.map(String)
@@ -129,7 +138,7 @@ export default function PerformancePage() {
         cell: ({ row }) => fmtMs(row.original.p99_ms),
       },
     ],
-    [projectOptions, projectId]
+    [projectOptions, projectId, projects]
   )
 
   const { table } = useDataTable({
@@ -143,7 +152,6 @@ export default function PerformancePage() {
     initialState: {
       sorting: [{ id: 'p95_ms', desc: true }],
       pagination: { pageIndex: 0, pageSize: 20 },
-      columnVisibility: { project_id: false },
     },
   })
 
@@ -165,14 +173,10 @@ export default function PerformancePage() {
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <h1 className="font-heading text-2xl font-medium tracking-tight">
-          Performance
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Transaction latency over the last 24 hours (p95 / p99).
-        </p>
-      </div>
+      <PageHeader
+        title="Performance"
+        description="Transaction latency (p95 / p99)."
+      />
 
       {transactionsQuery.isLoading || projectsQuery.isLoading ? (
         <Skeleton className="h-48 w-full" />

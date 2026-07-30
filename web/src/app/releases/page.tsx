@@ -1,12 +1,16 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
-import { AlertCircleIcon } from 'lucide-react'
+import { AlertCircleIcon, PlusIcon } from 'lucide-react'
 import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
-import { api, formatTime, type Release } from '@/api'
+import { api, formatRelativeTime, formatTime, type Release } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
 import { ListDataTableFilters } from '@/components/list-data-table-filters'
+import {
+  PageHeader,
+  PageHeaderActionLabel,
+} from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -130,6 +134,14 @@ export default function ReleasesPage() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} label="Project" />
         ),
+        cell: ({ row }) => {
+          const project = projects.find((p) => p.id === row.original.project_id)
+          return (
+            <span className="text-muted-foreground">
+              {project?.name ?? row.original.project_id}
+            </span>
+          )
+        },
         filterFn: (row, _id, value) => {
           const selected = Array.isArray(value)
             ? value.map(String)
@@ -161,13 +173,16 @@ export default function ReleasesPage() {
           <DataTableColumnHeader column={column} label="Created" />
         ),
         cell: ({ row }) => (
-          <span className="text-muted-foreground">
-            {formatTime(row.original.created_at)}
+          <span
+            className="text-muted-foreground"
+            title={formatTime(row.original.created_at)}
+          >
+            {formatRelativeTime(row.original.created_at)}
           </span>
         ),
       },
     ],
-    [projectOptions]
+    [projectOptions, projects]
   )
 
   const rawReleases = releasesQuery.data ?? []
@@ -182,7 +197,6 @@ export default function ReleasesPage() {
     initialState: {
       sorting: [{ id: 'created_at', desc: true }],
       pagination: { pageIndex: 0, pageSize: 20 },
-      columnVisibility: { project_id: false },
     },
   })
 
@@ -196,16 +210,11 @@ export default function ReleasesPage() {
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-2xl font-medium tracking-tight">
-            Releases
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Versions linked to projects for release health.
-          </p>
-        </div>
-        <Dialog
+      <PageHeader
+        title="Releases"
+        description="Versions and release health."
+        actions={
+          <Dialog
             open={open}
             onOpenChange={(next) => {
               setOpen(next)
@@ -214,7 +223,12 @@ export default function ReleasesPage() {
               }
             }}
           >
-            <DialogTrigger render={<Button />}>Register release</DialogTrigger>
+            <DialogTrigger
+              render={<Button aria-label="Register release" />}
+            >
+              <PlusIcon data-icon="inline-start" />
+              <PageHeaderActionLabel>Register release</PageHeaderActionLabel>
+            </DialogTrigger>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
                 <DialogTitle>Register release</DialogTitle>
@@ -275,7 +289,8 @@ export default function ReleasesPage() {
               </form>
             </DialogContent>
           </Dialog>
-      </div>
+        }
+      />
 
       {error && (
         <Alert variant="destructive">

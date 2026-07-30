@@ -29,6 +29,19 @@ export default function RootLayout() {
                   )
                 }
               >
+                Dashboard
+              </NavLink>
+              <NavLink
+                to="/projects"
+                className={({ isActive }) =>
+                  cn(
+                    buttonVariants({ variant: 'ghost', size: 'sm' }),
+                    isActive
+                      ? 'bg-muted text-foreground'
+                      : 'text-muted-foreground'
+                  )
+                }
+              >
                 Projects
               </NavLink>
               <NavLink

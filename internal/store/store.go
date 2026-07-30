@@ -52,6 +52,7 @@ type Issue struct {
 	Regressed    bool     `json:"regressed"`
 	Assignee     *string  `json:"assignee,omitempty"`
 	Environments []string `json:"environments,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
 }
 
 type Event struct {
@@ -309,7 +310,55 @@ func (s *Store) ListIssues(ctx context.Context, f IssueListFilter) ([]Issue, err
 		}
 		out = append(out, *iss)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if err := s.attachIssueTagFacets(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// attachIssueTagFacets fills Environments and Tags (key:value, excluding release) on each issue.
+func (s *Store) attachIssueTagFacets(ctx context.Context, issues []Issue) error {
+	if len(issues) == 0 {
+		return nil
+	}
+	byID := make(map[int64]int, len(issues))
+	placeholders := make([]string, len(issues))
+	args := make([]any, len(issues))
+	for i := range issues {
+		byID[issues[i].ID] = i
+		placeholders[i] = "?"
+		args[i] = issues[i].ID
+	}
+	q := `SELECT DISTINCT issue_id, key, value FROM event_tags WHERE issue_id IN (` +
+		strings.Join(placeholders, ",") + `) ORDER BY key, value`
+	rows, err := s.DB.QueryContext(ctx, q, args...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var issueID int64
+		var key, value string
+		if err := rows.Scan(&issueID, &key, &value); err != nil {
+			return err
+		}
+		idx, ok := byID[issueID]
+		if !ok || value == "" {
+			continue
+		}
+		switch key {
+		case "environment":
+			issues[idx].Environments = append(issues[idx].Environments, value)
+		case "release":
+			// Releases are already on first_release / last_release.
+		default:
+			issues[idx].Tags = append(issues[idx].Tags, key+":"+value)
+		}
+	}
+	return rows.Err()
 }
 
 type scannable interface {
@@ -353,21 +402,11 @@ func (s *Store) GetIssue(ctx context.Context, id int64) (*Issue, error) {
 		return nil, err
 	}
 
-	rows, err := s.DB.QueryContext(ctx, `
-		SELECT DISTINCT value FROM event_tags WHERE issue_id = ? AND key = 'environment' ORDER BY value
-	`, id)
-	if err != nil {
+	list := []Issue{*iss}
+	if err := s.attachIssueTagFacets(ctx, list); err != nil {
 		return iss, nil
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var v string
-		if err := rows.Scan(&v); err != nil {
-			return nil, err
-		}
-		iss.Environments = append(iss.Environments, v)
-	}
-	return iss, nil
+	return &list[0], nil
 }
 
 func (s *Store) UpdateIssueStatus(ctx context.Context, id int64, status string) error {

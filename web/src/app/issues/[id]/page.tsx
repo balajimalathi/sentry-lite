@@ -1,7 +1,16 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { AlertCircleIcon } from 'lucide-react'
-import { api, formatTime, parsePayload, type Event, type Frame, type Issue } from '@/api'
+import {
+  api,
+  formatRelativeTime,
+  formatTime,
+  parsePayload,
+  type Event,
+  type Frame,
+  type Issue,
+} from '@/api'
+import { toTitleCase } from '@/lib/format'
 import { statusVariant } from '@/lib/status'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
@@ -28,11 +37,21 @@ import {
   CollapsibleTrigger,
 } from '@/components/ui/collapsible'
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import {
   Empty,
   EmptyDescription,
   EmptyHeader,
   EmptyTitle,
 } from '@/components/ui/empty'
+import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
@@ -52,6 +71,7 @@ export default function IssueDetailPage() {
   const [expanded, setExpanded] = useState(true)
   const [error, setError] = useState('')
   const [assigneeDraft, setAssigneeDraft] = useState('')
+  const [ownerOpen, setOwnerOpen] = useState(false)
 
   async function load() {
     const [detail, evs] = await Promise.all([api.issue(id), api.events(id)])
@@ -71,12 +91,20 @@ export default function IssueDetailPage() {
     setIssue(updated)
   }
 
+  function onOwnerOpenChange(next: boolean) {
+    setOwnerOpen(next)
+    if (next && issue) {
+      setAssigneeDraft(issue.assignee ?? '')
+    }
+  }
+
   async function saveAssignee(e: FormEvent) {
     e.preventDefault()
     if (!issue) return
     const updated = await api.updateAssignee(issue.id, assigneeDraft.trim())
     setIssue(updated)
     setAssigneeDraft(updated.assignee ?? '')
+    setOwnerOpen(false)
   }
 
   if (error) {
@@ -115,9 +143,9 @@ export default function IssueDetailPage() {
   }
 
   return (
-    <section className="flex flex-col gap-6">
-      <Breadcrumb>
-        <BreadcrumbList>
+    <section className="flex min-w-0 flex-col gap-6">
+      <Breadcrumb className="min-w-0">
+        <BreadcrumbList className="flex-wrap">
           <BreadcrumbItem>
             <BreadcrumbLink render={<Link to="/issues" />}>
               Issues
@@ -130,18 +158,63 @@ export default function IssueDetailPage() {
         </BreadcrumbList>
       </Breadcrumb>
 
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <h1 className="font-heading text-2xl font-medium tracking-tight">
-            {issue.title}
-          </h1>
-          <p className="font-mono text-sm text-muted-foreground">
-            {issue.culprit || 'No culprit'}
-          </p>
+      <div className="flex min-w-0 flex-col gap-3">
+        <div className="flex min-w-0 items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-col gap-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <h1 className="font-heading text-xl font-medium tracking-tight wrap-break-word sm:text-2xl">
+                {issue.title}
+              </h1>
+              <Badge variant={statusVariant(issue.status)}>
+                {toTitleCase(issue.status)}
+              </Badge>
+              {issue.regressed && <Badge variant="outline">Regressed</Badge>}
+            </div>
+            <p className="font-mono text-sm text-muted-foreground break-all">
+              {issue.culprit || 'No culprit'}
+            </p>
+          </div>
+          <Dialog open={ownerOpen} onOpenChange={onOwnerOpenChange}>
+            <DialogTrigger
+              render={
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="shrink-0"
+                />
+              }
+            >
+              {issue.assignee || 'Assign'}
+            </DialogTrigger>
+            <DialogContent className="sm:max-w-sm">
+              <DialogHeader>
+                <DialogTitle>Assign owner</DialogTitle>
+                <DialogDescription>
+                  Set an email or handle responsible for this issue.
+                </DialogDescription>
+              </DialogHeader>
+              <form onSubmit={saveAssignee} className="flex flex-col gap-4">
+                <FieldGroup>
+                  <Field>
+                    <FieldLabel htmlFor="assignee">Owner</FieldLabel>
+                    <Input
+                      id="assignee"
+                      value={assigneeDraft}
+                      onChange={(e) => setAssigneeDraft(e.target.value)}
+                      placeholder="email or handle"
+                      autoFocus
+                    />
+                  </Field>
+                </FieldGroup>
+                <DialogFooter>
+                  <Button type="submit">Save owner</Button>
+                </DialogFooter>
+              </form>
+            </DialogContent>
+          </Dialog>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Badge variant={statusVariant(issue.status)}>{issue.status}</Badge>
-          {issue.regressed && <Badge variant="outline">regressed</Badge>}
           <Button type="button" size="sm" onClick={() => setStatus('resolved')}>
             Resolve
           </Button>
@@ -164,51 +237,46 @@ export default function IssueDetailPage() {
         </div>
       </div>
 
-      <form
-        onSubmit={saveAssignee}
-        className="flex flex-wrap items-end gap-2"
-      >
-        <div className="flex min-w-[12rem] flex-1 flex-col gap-1.5">
-          <label htmlFor="assignee" className="text-sm text-muted-foreground">
-            Owner
-          </label>
-          <Input
-            id="assignee"
-            value={assigneeDraft}
-            onChange={(e) => setAssigneeDraft(e.target.value)}
-            placeholder="email or handle"
-          />
-        </div>
-        <Button type="submit" size="sm" variant="outline">
-          Save owner
-        </Button>
-      </form>
-
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-        {[
-          { label: 'Events', value: String(issue.count) },
-          { label: 'First seen', value: formatTime(issue.first_seen) },
-          { label: 'Last seen', value: formatTime(issue.last_seen) },
-          {
-            label: 'Environments',
-            value: (issue.environments ?? []).join(', ') || '—',
-          },
-          { label: 'First release', value: issue.first_release || '—' },
-          { label: 'Last release', value: issue.last_release || '—' },
-        ].map((item) => (
-          <Card key={item.label} size="sm">
-            <CardHeader>
+        {(
+          [
+            { label: 'Events', value: String(issue.count) },
+            {
+              label: 'First seen',
+              value: formatRelativeTime(issue.first_seen),
+              title: formatTime(issue.first_seen),
+            },
+            {
+              label: 'Last seen',
+              value: formatRelativeTime(issue.last_seen),
+              title: formatTime(issue.last_seen),
+            },
+            {
+              label: 'Environments',
+              value: (issue.environments ?? []).join(', ') || '—',
+            },
+            { label: 'First release', value: issue.first_release || '—' },
+            { label: 'Last release', value: issue.last_release || '—' },
+          ] as Array<{ label: string; value: string; title?: string }>
+        ).map((item) => (
+          <Card key={item.label} size="sm" className="min-w-0">
+            <CardHeader className="min-w-0">
               <CardDescription className="uppercase">
                 {item.label}
               </CardDescription>
-              <CardTitle className="text-sm">{item.value}</CardTitle>
+              <CardTitle
+                className="truncate text-sm"
+                title={item.title ?? item.value}
+              >
+                {item.value}
+              </CardTitle>
             </CardHeader>
           </Card>
         ))}
       </div>
 
       {traceId && (
-        <p className="text-sm">
+        <p className="min-w-0 text-sm break-all">
           Trace:{' '}
           <Link
             to={`/traces/${traceId}`}
@@ -219,9 +287,9 @@ export default function IssueDetailPage() {
         </p>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-[2fr_1fr_1fr]">
-        <Collapsible open={expanded} onOpenChange={setExpanded}>
-          <Card>
+      <div className="grid min-w-0 gap-4 lg:grid-cols-[2fr_1fr_1fr]">
+        <Collapsible open={expanded} onOpenChange={setExpanded} className="min-w-0">
+          <Card className="min-w-0">
             <CardHeader className="border-b">
               <CardTitle>Stack trace</CardTitle>
               <CardAction>
@@ -233,7 +301,7 @@ export default function IssueDetailPage() {
               </CardAction>
             </CardHeader>
             <CollapsibleContent>
-              <CardContent>
+              <CardContent className="min-w-0 overflow-x-auto">
                 {frames.length === 0 ? (
                   <p className="text-sm text-muted-foreground">
                     No stack frames on latest event.
@@ -245,11 +313,11 @@ export default function IssueDetailPage() {
                         key={i}
                         className={
                           f.in_app
-                            ? 'font-medium text-foreground'
-                            : 'text-muted-foreground'
+                            ? 'min-w-0 font-medium text-foreground'
+                            : 'min-w-0 text-muted-foreground'
                         }
                       >
-                        <div className="font-mono text-sm">
+                        <div className="font-mono text-sm break-all">
                           {f.filename || f.abs_path || f.module || '?'}
                           {f.lineno ? `:${f.lineno}` : ''}
                           {f.function ? ` in ${f.function}` : ''}
@@ -263,11 +331,11 @@ export default function IssueDetailPage() {
           </Card>
         </Collapsible>
 
-        <Card>
+        <Card className="min-w-0">
           <CardHeader className="border-b">
             <CardTitle>Tags</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="min-w-0">
             {Object.keys(tags).length === 0 ? (
               <p className="text-sm text-muted-foreground">No tags.</p>
             ) : (
@@ -275,10 +343,10 @@ export default function IssueDetailPage() {
                 {Object.entries(tags).map(([k, v]) => (
                   <div
                     key={k}
-                    className="grid grid-cols-[1fr_1.4fr] gap-2 border-b border-border py-1.5 last:border-b-0"
+                    className="grid grid-cols-1 gap-0.5 border-b border-border py-1.5 last:border-b-0 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] sm:gap-2"
                   >
-                    <dt className="text-sm text-muted-foreground">{k}</dt>
-                    <dd className="text-sm break-words">{v}</dd>
+                    <dt className="text-sm text-muted-foreground break-all">{k}</dt>
+                    <dd className="text-sm break-all">{v}</dd>
                   </div>
                 ))}
               </dl>
@@ -286,30 +354,30 @@ export default function IssueDetailPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className="min-w-0">
           <CardHeader className="border-b">
             <CardTitle>User</CardTitle>
           </CardHeader>
-          <CardContent>
+          <CardContent className="min-w-0">
             <dl className="flex flex-col">
-              <div className="grid grid-cols-[1fr_1.4fr] gap-2 border-b border-border py-1.5">
+              <div className="grid grid-cols-1 gap-0.5 border-b border-border py-1.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] sm:gap-2">
                 <dt className="text-sm text-muted-foreground">id</dt>
-                <dd className="text-sm break-words">{user.id || '—'}</dd>
+                <dd className="text-sm break-all">{user.id || '—'}</dd>
               </div>
-              <div className="grid grid-cols-[1fr_1.4fr] gap-2 py-1.5">
+              <div className="grid grid-cols-1 gap-0.5 py-1.5 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)] sm:gap-2">
                 <dt className="text-sm text-muted-foreground">email</dt>
-                <dd className="text-sm break-words">{user.email || '—'}</dd>
+                <dd className="text-sm break-all">{user.email || '—'}</dd>
               </div>
             </dl>
           </CardContent>
         </Card>
       </div>
 
-      <Card>
+      <Card className="min-w-0 overflow-hidden">
         <CardHeader className="border-b">
           <CardTitle>Breadcrumbs</CardTitle>
         </CardHeader>
-        <CardContent className="px-0">
+        <CardContent className="min-w-0 px-0">
           {breadcrumbs.length === 0 ? (
             <p className="px-4 py-3 text-sm text-muted-foreground">
               No breadcrumbs on latest event.
@@ -330,16 +398,26 @@ export default function IssueDetailPage() {
                     <TableCell className="pl-4 font-mono text-xs">
                       {bc.category || bc.type || '—'}
                     </TableCell>
-                    <TableCell className="max-w-md truncate text-sm">
+                    <TableCell
+                      className="max-w-48 truncate text-sm sm:max-w-md"
+                      title={bc.message || undefined}
+                    >
                       {bc.message || '—'}
                     </TableCell>
                     <TableCell>{bc.level || '—'}</TableCell>
                     <TableCell className="pr-4 text-muted-foreground">
-                      {bc.timestamp != null
-                        ? typeof bc.timestamp === 'number'
-                          ? formatTime(new Date(bc.timestamp * 1000).toISOString())
-                          : formatTime(String(bc.timestamp))
-                        : '—'}
+                      {(() => {
+                        if (bc.timestamp == null) return '—'
+                        const iso =
+                          typeof bc.timestamp === 'number'
+                            ? new Date(bc.timestamp * 1000).toISOString()
+                            : String(bc.timestamp)
+                        return (
+                          <span title={formatTime(iso)}>
+                            {formatRelativeTime(iso)}
+                          </span>
+                        )
+                      })()}
                     </TableCell>
                   </TableRow>
                 ))}
@@ -349,11 +427,11 @@ export default function IssueDetailPage() {
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="min-w-0 overflow-hidden">
         <CardHeader className="border-b">
           <CardTitle>Event timeline</CardTitle>
         </CardHeader>
-        <CardContent className="px-0">
+        <CardContent className="min-w-0 px-0">
           {events.length === 0 ? (
             <Empty className="py-8">
               <EmptyHeader>
@@ -380,7 +458,9 @@ export default function IssueDetailPage() {
                       {ev.event_id.slice(0, 16)}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
-                      {formatTime(ev.timestamp)}
+                      <span title={formatTime(ev.timestamp)}>
+                        {formatRelativeTime(ev.timestamp)}
+                      </span>
                     </TableCell>
                     <TableCell>{ev.environment || '—'}</TableCell>
                     <TableCell className="pr-4">{ev.release || '—'}</TableCell>

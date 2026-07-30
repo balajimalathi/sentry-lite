@@ -4,11 +4,12 @@ import { useQuery } from '@tanstack/react-query'
 import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
 import { AlertCircleIcon } from 'lucide-react'
 import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
-import { api, formatTime, type Issue } from '@/api'
+import { api, formatRelativeTime, formatTime, type Issue } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
 import { ListDataTableFilters } from '@/components/list-data-table-filters'
 import { ListFilterModeToggle } from '@/components/list-filter-mode-toggle'
+import { PageHeader } from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -21,6 +22,7 @@ import {
   applyAdvancedIssueFilters,
   columnFiltersToIssueParams,
 } from '@/lib/issue-filters'
+import { toTitleCase } from '@/lib/format'
 import { statusVariant } from '@/lib/status'
 
 const BASIC_FILTER_KEYS = [
@@ -150,7 +152,7 @@ export default function IssuesPage() {
           <div className="flex max-w-xs flex-wrap items-center gap-2 whitespace-normal">
             <Link
               to={`/issues/${row.original.id}`}
-              className="font-medium text-primary underline-offset-4 hover:underline"
+              className="font-medium underline-offset-4 hover:underline"
             >
               {row.original.title}
             </Link>
@@ -174,7 +176,7 @@ export default function IssuesPage() {
         ),
         cell: ({ row }) => (
           <Badge variant={statusVariant(row.original.status)}>
-            {row.original.status}
+            {toTitleCase(row.original.status)}
           </Badge>
         ),
       },
@@ -226,11 +228,21 @@ export default function IssuesPage() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} label="Environment" />
         ),
-        cell: ({ row }) => (
-          <span className="text-muted-foreground">
-            {(row.original.environments ?? []).join(', ') || '—'}
-          </span>
-        ),
+        cell: ({ row }) => {
+          const envs = row.original.environments ?? []
+          if (envs.length === 0) {
+            return <span className="text-muted-foreground">—</span>
+          }
+          return (
+            <div className="flex max-w-[10rem] flex-wrap gap-1">
+              {envs.map((env) => (
+                <Badge key={env} variant="outline" className="font-normal">
+                  {env}
+                </Badge>
+              ))}
+            </div>
+          )
+        },
       },
       {
         id: 'release',
@@ -253,20 +265,50 @@ export default function IssuesPage() {
       },
       {
         id: 'tag',
-        accessorFn: () => '',
+        accessorFn: (r) => r.tags ?? [],
         enableColumnFilter: true,
         enableSorting: false,
         enableHiding: true,
         meta: {
-          label: 'Tag',
+          label: 'Tags',
           variant: 'select',
           options: tagOptions,
         },
-        filterFn: () => true,
+        filterFn: (row, _id, value) => {
+          const selected = Array.isArray(value)
+            ? value.map(String)
+            : [String(value)]
+          const tags = row.original.tags ?? []
+          return selected.some((v) => tags.includes(v))
+        },
         header: ({ column }) => (
-          <DataTableColumnHeader column={column} label="Tag" />
+          <DataTableColumnHeader column={column} label="Tags" />
         ),
-        cell: () => <span className="text-muted-foreground">—</span>,
+        cell: ({ row }) => {
+          const tags = row.original.tags ?? []
+          if (tags.length === 0) {
+            return <span className="text-muted-foreground">—</span>
+          }
+          const shown = tags.slice(0, 3)
+          return (
+            <div className="flex max-w-xs flex-wrap items-center gap-1">
+              {shown.map((tag) => (
+                <Badge
+                  key={tag}
+                  variant="outline"
+                  className="max-w-[8rem] truncate font-mono text-xs font-normal"
+                >
+                  {tag}
+                </Badge>
+              ))}
+              {tags.length > 3 && (
+                <span className="text-xs text-muted-foreground">
+                  +{tags.length - 3}
+                </span>
+              )}
+            </div>
+          )
+        },
       },
       {
         id: 'owner',
@@ -297,8 +339,11 @@ export default function IssuesPage() {
           <DataTableColumnHeader column={column} label="First seen" />
         ),
         cell: ({ row }) => (
-          <span className="text-muted-foreground">
-            {formatTime(row.original.first_seen)}
+          <span
+            className="text-muted-foreground"
+            title={formatTime(row.original.first_seen)}
+          >
+            {formatRelativeTime(row.original.first_seen)}
           </span>
         ),
       },
@@ -314,21 +359,11 @@ export default function IssuesPage() {
           <DataTableColumnHeader column={column} label="Last seen" />
         ),
         cell: ({ row }) => (
-          <span className="text-muted-foreground">
-            {formatTime(row.original.last_seen)}
-          </span>
-        ),
-      },
-      {
-        id: 'culprit',
-        accessorKey: 'culprit',
-        meta: { label: 'Culprit' },
-        header: ({ column }) => (
-          <DataTableColumnHeader column={column} label="Culprit" />
-        ),
-        cell: ({ row }) => (
-          <span className="max-w-[12rem] truncate font-mono text-muted-foreground">
-            {row.original.culprit || '—'}
+          <span
+            className="text-muted-foreground"
+            title={formatTime(row.original.last_seen)}
+          >
+            {formatRelativeTime(row.original.last_seen)}
           </span>
         ),
       },
@@ -360,12 +395,6 @@ export default function IssuesPage() {
     initialState: {
       sorting: [{ id: 'last_seen', desc: true }],
       pagination: { pageIndex: 0, pageSize: 20 },
-      columnVisibility: {
-        project_id: false,
-        environment: false,
-        release: false,
-        tag: false,
-      },
     },
   })
 
@@ -383,25 +412,21 @@ export default function IssuesPage() {
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-2xl font-medium tracking-tight">
-            Issues
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Filter with toolbar chips, advanced rules, or a command menu.
-          </p>
-        </div>
-        <ListFilterModeToggle
-          filterMode={filterMode}
-          setFilterMode={setFilterMode}
-          clearAdvanced={clearAdvancedFilters}
-          clearBasic={() =>
-            void setBasicFilterValues(clearBasicFilterRecord(BASIC_FILTER_KEYS))
-          }
-          table={table}
-        />
-      </div>
+      <PageHeader
+        title="Issues"
+        description="Browse and filter error groups."
+        actions={
+          <ListFilterModeToggle
+            filterMode={filterMode}
+            setFilterMode={setFilterMode}
+            clearAdvanced={clearAdvancedFilters}
+            clearBasic={() =>
+              void setBasicFilterValues(clearBasicFilterRecord(BASIC_FILTER_KEYS))
+            }
+            table={table}
+          />
+        }
+      />
 
       {issuesQuery.isLoading ? (
         <Skeleton className="h-48 w-full" />

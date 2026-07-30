@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { AlertCircleIcon } from 'lucide-react'
 import {
   api,
+  formatRelativeTime,
   formatTime,
   type TransactionSample,
   type TransactionSummary,
@@ -102,7 +103,9 @@ export default function TransactionDetailPage() {
                 ) : null}
               </div>
               <div className="text-xs text-muted-foreground">
-                {formatTime(s.timestamp)}
+                <span title={formatTime(s.timestamp)}>
+                  {formatRelativeTime(s.timestamp)}
+                </span>
                 {s.trace_id ? (
                   <>
                     {' · '}

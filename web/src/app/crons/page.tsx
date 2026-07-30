@@ -1,12 +1,16 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
-import { AlertCircleIcon } from 'lucide-react'
+import { AlertCircleIcon, PlusIcon } from 'lucide-react'
 import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
-import { api, formatTime, type CronMonitor } from '@/api'
+import { api, formatRelativeTime, formatTime, type CronMonitor } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
 import { ListDataTableFilters } from '@/components/list-data-table-filters'
+import {
+  PageHeader,
+  PageHeaderActionLabel,
+} from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -196,6 +200,14 @@ export default function CronsPage() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} label="Project" />
         ),
+        cell: ({ row }) => {
+          const project = projects.find((p) => p.id === row.original.project_id)
+          return (
+            <span className="text-muted-foreground">
+              {project?.name ?? row.original.project_id}
+            </span>
+          )
+        },
         filterFn: (row, _id, value) => {
           const selected = Array.isArray(value)
             ? value.map(String)
@@ -230,8 +242,11 @@ export default function CronsPage() {
           <DataTableColumnHeader column={column} label="Last check-in" />
         ),
         cell: ({ row }) => (
-          <span className="text-muted-foreground">
-            {formatTime(row.original.last_checkin_at)}
+          <span
+            className="text-muted-foreground"
+            title={formatTime(row.original.last_checkin_at)}
+          >
+            {formatRelativeTime(row.original.last_checkin_at)}
           </span>
         ),
       },
@@ -243,8 +258,11 @@ export default function CronsPage() {
           <DataTableColumnHeader column={column} label="Next expected" />
         ),
         cell: ({ row }) => (
-          <span className="text-muted-foreground">
-            {formatTime(row.original.next_expected_at)}
+          <span
+            className="text-muted-foreground"
+            title={formatTime(row.original.next_expected_at)}
+          >
+            {formatRelativeTime(row.original.next_expected_at)}
           </span>
         ),
       },
@@ -293,7 +311,14 @@ export default function CronsPage() {
         ),
       },
     ],
-    [statusOptions, projectOptions, envOptions, publicBase, deleteMutation]
+    [
+      statusOptions,
+      projectOptions,
+      envOptions,
+      publicBase,
+      deleteMutation,
+      projects,
+    ]
   )
 
   const { table } = useDataTable({
@@ -307,7 +332,7 @@ export default function CronsPage() {
     initialState: {
       sorting: [{ id: 'name', desc: false }],
       pagination: { pageIndex: 0, pageSize: 20 },
-      columnVisibility: { project_id: false, environment: false },
+      columnVisibility: { environment: false },
     },
   })
 
@@ -325,21 +350,18 @@ export default function CronsPage() {
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-2xl font-medium tracking-tight">
-            Crons
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Register heartbeat monitors. POST to the check-in URL within the
-            schedule window or the monitor goes late/missed.
-          </p>
-        </div>
-        <Dialog open={open} onOpenChange={setOpen}>
+      <PageHeader
+        title="Crons"
+        description="Heartbeat monitors for scheduled jobs."
+        actions={
+          <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger
-              render={<Button disabled={!projectId} />}
+              render={
+                <Button disabled={!projectId} aria-label="Create monitor" />
+              }
             >
-              Create monitor
+              <PlusIcon data-icon="inline-start" />
+              <PageHeaderActionLabel>Create monitor</PageHeaderActionLabel>
             </DialogTrigger>
             <DialogContent className="sm:max-w-md">
               <DialogHeader>
@@ -393,7 +415,8 @@ export default function CronsPage() {
               </form>
             </DialogContent>
           </Dialog>
-      </div>
+        }
+      />
 
       {error && (
         <Alert variant="destructive">

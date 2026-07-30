@@ -1,12 +1,16 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
-import { AlertCircleIcon } from 'lucide-react'
+import { AlertCircleIcon, PlusIcon } from 'lucide-react'
 import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
 import { api, type AlertRule } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
 import { ListDataTableFilters } from '@/components/list-data-table-filters'
+import {
+  PageHeader,
+  PageHeaderActionLabel,
+} from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import {
@@ -218,6 +222,14 @@ export default function AlertsPage() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} label="Project" />
         ),
+        cell: ({ row }) => {
+          const project = projects.find((p) => p.id === row.original.project_id)
+          return (
+            <span className="text-muted-foreground">
+              {project?.name ?? row.original.project_id}
+            </span>
+          )
+        },
         filterFn: (row, _id, value) => {
           const selected = Array.isArray(value)
             ? value.map(String)
@@ -251,7 +263,7 @@ export default function AlertsPage() {
         },
       },
     ],
-    [projectOptions, enabledOptions]
+    [projectOptions, enabledOptions, projects]
   )
 
   const rawRules = rulesQuery.data ?? []
@@ -266,7 +278,7 @@ export default function AlertsPage() {
     initialState: {
       sorting: [{ id: 'name', desc: false }],
       pagination: { pageIndex: 0, pageSize: 20 },
-      columnVisibility: { project_id: false, enabled: false },
+      columnVisibility: { enabled: false },
     },
   })
 
@@ -279,21 +291,21 @@ export default function AlertsPage() {
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <h1 className="font-heading text-2xl font-medium tracking-tight">
-            Alerts
-          </h1>
-          <p className="text-sm text-muted-foreground">
-            Rules for new issues, regressions, error volume, and missed crons.
-            Channels: Slack, email, webhook, or Telegram.
-          </p>
-        </div>
-        <Dialog open={open} onOpenChange={setOpen}>
+      <PageHeader
+        title="Alerts"
+        description="Notify on issues, volume, and missed crons."
+        actions={
+          <Dialog open={open} onOpenChange={setOpen}>
             <DialogTrigger
-              render={<Button disabled={!createProjectId} />}
+              render={
+                <Button
+                  disabled={!createProjectId}
+                  aria-label="Create rule"
+                />
+              }
             >
-              Create rule
+              <PlusIcon data-icon="inline-start" />
+              <PageHeaderActionLabel>Create rule</PageHeaderActionLabel>
             </DialogTrigger>
             <DialogContent className="sm:max-w-lg">
               <DialogHeader>
@@ -414,7 +426,8 @@ export default function AlertsPage() {
               </form>
             </DialogContent>
           </Dialog>
-      </div>
+        }
+      />
 
       {error && (
         <Alert variant="destructive">

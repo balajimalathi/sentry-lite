@@ -36,6 +36,8 @@ export type Issue = {
   regressed: boolean
   assignee?: string | null
   environments?: string[]
+  /** Distinct key:value pairs from event_tags (excludes environment / release). */
+  tags?: string[]
 }
 
 export type Frame = {
@@ -265,6 +267,31 @@ export function formatTime(iso: string | null | undefined) {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleString()
+}
+
+/** Compact relative age from an API ISO timestamp (Sentry-style: `5m`, `1h`, `35d`; future: `in 5m`). */
+export function formatRelativeTime(iso: string | null | undefined) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const diffSec = Math.floor((Date.now() - d.getTime()) / 1000)
+  const future = diffSec < 0
+  const sec = Math.abs(diffSec)
+  let label: string
+  if (sec < 60) label = `${sec}s`
+  else {
+    const min = Math.floor(sec / 60)
+    if (min < 60) label = `${min}m`
+    else {
+      const hr = Math.floor(min / 60)
+      if (hr < 24) label = `${hr}h`
+      else {
+        const day = Math.floor(hr / 24)
+        label = day < 365 ? `${day}d` : `${Math.floor(day / 365)}y`
+      }
+    }
+  }
+  return future ? `in ${label}` : label
 }
 
 export function parsePayload(ev: Event | null) {

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { AlertCircleIcon } from 'lucide-react'
-import { api, formatTime, type TraceDetail } from '@/api'
+import { api, formatRelativeTime, formatTime, type TraceDetail } from '@/api'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   Breadcrumb,
@@ -115,7 +115,9 @@ export default function TracePage() {
                 <TableCell>{fmtMs(t.duration_ms)}</TableCell>
                 <TableCell>{t.status || '—'}</TableCell>
                 <TableCell className="text-muted-foreground">
-                  {formatTime(t.timestamp)}
+                  <span title={formatTime(t.timestamp)}>
+                    {formatRelativeTime(t.timestamp)}
+                  </span>
                 </TableCell>
               </TableRow>
             ))}

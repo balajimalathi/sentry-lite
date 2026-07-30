@@ -91,7 +91,7 @@ function issueCellValue(issue: Issue, id: string): unknown {
     case 'release':
       return issue.last_release ?? issue.first_release ?? ''
     case 'tag':
-      return ''
+      return issue.tags ?? []
     case 'last_seen':
       return new Date(issue.last_seen).getTime()
     case 'culprit':
