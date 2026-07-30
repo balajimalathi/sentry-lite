@@ -1,5 +1,8 @@
 import { useEffect, useState, type FormEvent } from 'react'
-import { api, type AlertRule, type Project } from '@/api'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertCircleIcon } from 'lucide-react'
+import { api } from '@/api'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
@@ -19,54 +22,70 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { AlertCircleIcon } from 'lucide-react'
 
 export default function AlertsPage() {
-  const [projects, setProjects] = useState<Project[]>([])
-  const [projectId, setProjectId] = useState('1')
-  const [rules, setRules] = useState<AlertRule[]>([])
-  const [name, setName] = useState('New issue Slack')
+  const qc = useQueryClient()
+  const [projectId, setProjectId] = useState('')
+  const [name, setName] = useState('New issue alert')
   const [trigger, setTrigger] = useState('new_issue')
   const [channel, setChannel] = useState('webhook')
   const [target, setTarget] = useState('')
+  const [botToken, setBotToken] = useState('')
+  const [chatId, setChatId] = useState('')
   const [threshold, setThreshold] = useState('10')
   const [error, setError] = useState('')
 
-  useEffect(() => {
-    api.projects().then((p) => {
-      setProjects(p)
-      if (p[0]) setProjectId(String(p[0].id))
-    })
-  }, [])
+  const projectsQuery = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => api.projects(),
+  })
 
   useEffect(() => {
-    api
-      .alerts(projectId)
-      .then(setRules)
-      .catch((e) => setError(String(e)))
-  }, [projectId])
+    const projects = projectsQuery.data
+    if (!projects?.length) return
+    if (!projectId || !projects.some((p) => String(p.id) === projectId)) {
+      setProjectId(String(projects[0].id))
+    }
+  }, [projectsQuery.data, projectId])
 
-  async function onCreate(e: FormEvent) {
-    e.preventDefault()
-    try {
-      await api.createAlert({
+  const rulesQuery = useQuery({
+    queryKey: ['alerts', projectId],
+    queryFn: () => api.alerts(projectId),
+    enabled: !!projectId,
+  })
+
+  const createMutation = useMutation({
+    mutationFn: () => {
+      const resolvedTarget =
+        channel === 'telegram' ? `${botToken.trim()}|${chatId.trim()}` : target
+      return api.createAlert({
         project_id: Number(projectId),
         name,
         trigger,
         channel,
-        target,
+        target: resolvedTarget,
         threshold: Number(threshold) || 0,
         window_sec: 300,
         secret: channel === 'webhook' ? 'dev-secret' : '',
       })
+    },
+    onSuccess: () => {
       setTarget('')
-      setRules(await api.alerts(projectId))
-    } catch (err) {
-      setError(String(err))
-    }
+      setBotToken('')
+      setChatId('')
+      setError('')
+      void qc.invalidateQueries({ queryKey: ['alerts', projectId] })
+    },
+    onError: (e) => setError(String(e)),
+  })
+
+  function onCreate(e: FormEvent) {
+    e.preventDefault()
+    createMutation.mutate()
   }
 
+  const projects = projectsQuery.data ?? []
+  const rules = rulesQuery.data ?? []
   const projectItems = projects.map((p) => ({
     label: p.name,
     value: String(p.id),
@@ -77,7 +96,8 @@ export default function AlertsPage() {
       <h1 className="font-heading text-2xl font-medium tracking-tight">Alerts</h1>
       <p className="text-sm text-muted-foreground">
         Rules for new issues, regressions, and error volume. Channels: Slack
-        webhook URL, email address (needs ALERT_SMTP), or signed webhook.
+        webhook URL, email (ALERT_SMTP), signed webhook, or Telegram (bot token
+        + chat id — sends a connect sample on create).
       </p>
       {error && (
         <Alert variant="destructive">
@@ -93,11 +113,11 @@ export default function AlertsPage() {
             <FieldLabel>Project</FieldLabel>
             <Select
               items={projectItems}
-              value={projectId}
-              onValueChange={(v) => setProjectId(v == null ? '1' : String(v))}
+              value={projectId || undefined}
+              onValueChange={(v) => setProjectId(v == null ? '' : String(v))}
             >
               <SelectTrigger>
-                <SelectValue />
+                <SelectValue placeholder="Select project" />
               </SelectTrigger>
               <SelectContent>
                 <SelectGroup>
@@ -144,6 +164,7 @@ export default function AlertsPage() {
                 { label: 'Webhook', value: 'webhook' },
                 { label: 'Slack', value: 'slack' },
                 { label: 'Email', value: 'email' },
+                { label: 'Telegram', value: 'telegram' },
               ]}
               value={channel}
               onValueChange={(v) => setChannel(String(v ?? 'webhook'))}
@@ -156,18 +177,40 @@ export default function AlertsPage() {
                   <SelectItem value="webhook">Webhook</SelectItem>
                   <SelectItem value="slack">Slack</SelectItem>
                   <SelectItem value="email">Email</SelectItem>
+                  <SelectItem value="telegram">Telegram</SelectItem>
                 </SelectGroup>
               </SelectContent>
             </Select>
           </Field>
-          <Field>
-            <FieldLabel>Target (URL / email)</FieldLabel>
-            <Input
-              value={target}
-              onChange={(e) => setTarget(e.target.value)}
-              placeholder="https://hooks.slack.com/... or you@example.com"
-            />
-          </Field>
+          {channel === 'telegram' ? (
+            <>
+              <Field>
+                <FieldLabel>Bot token</FieldLabel>
+                <Input
+                  value={botToken}
+                  onChange={(e) => setBotToken(e.target.value)}
+                  placeholder="123456:ABC-DEF..."
+                />
+              </Field>
+              <Field>
+                <FieldLabel>Chat ID</FieldLabel>
+                <Input
+                  value={chatId}
+                  onChange={(e) => setChatId(e.target.value)}
+                  placeholder="123456789"
+                />
+              </Field>
+            </>
+          ) : (
+            <Field>
+              <FieldLabel>Target (URL / email)</FieldLabel>
+              <Input
+                value={target}
+                onChange={(e) => setTarget(e.target.value)}
+                placeholder="https://hooks.slack.com/... or you@example.com"
+              />
+            </Field>
+          )}
           <Field>
             <FieldLabel>Volume threshold</FieldLabel>
             <Input
@@ -177,7 +220,11 @@ export default function AlertsPage() {
             />
           </Field>
         </FieldGroup>
-        <Button type="submit" className="w-fit">
+        <Button
+          type="submit"
+          className="w-fit"
+          disabled={createMutation.isPending || !projectId}
+        >
           Create rule
         </Button>
       </form>
@@ -198,7 +245,9 @@ export default function AlertsPage() {
               <TableCell>{r.trigger}</TableCell>
               <TableCell>{r.channel}</TableCell>
               <TableCell className="max-w-xs truncate font-mono text-xs">
-                {r.target}
+                {r.channel === 'telegram'
+                  ? maskTelegramTarget(r.target)
+                  : r.target}
               </TableCell>
             </TableRow>
           ))}
@@ -213,4 +262,10 @@ export default function AlertsPage() {
       </Table>
     </section>
   )
+}
+
+function maskTelegramTarget(target: string) {
+  const i = target.indexOf('|')
+  if (i <= 0) return '••••'
+  return `${target.slice(0, 6)}…|${target.slice(i + 1)}`
 }

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/charmbracelet/lipgloss"
 )
 
 type ProcUsage struct {
@@ -302,77 +304,125 @@ func formatBytes(n uint64) string {
 	}
 }
 
-func formatStats(s StatsSnapshot, cfg Config) string {
-	var b strings.Builder
-	b.WriteString(fmt.Sprintf("updated %s\n\n", s.At.Format("15:04:05")))
+func miniCard(label, value string, width int) string {
+	inner := styleCardLabel.Render(label) + "\n" + styleCardValue.Render(value)
+	return styleCard.Width(width).Render(inner)
+}
 
-	b.WriteString("HOST\n")
-	b.WriteString(fmt.Sprintf("  os          %s/%s  cpus %d\n", s.Host.GOOS, s.Host.GOARCH, s.Host.NumCPU))
-	if s.Host.TotalRAM > 0 {
-		b.WriteString(fmt.Sprintf("  total ram   %s\n", formatBytes(s.Host.TotalRAM)))
+func progressBar(pct float64, width int) string {
+	if width < 4 {
+		width = 4
 	}
-	b.WriteString("\n")
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 1 {
+		pct = 1
+	}
+	filled := int(pct * float64(width))
+	if filled > width {
+		filled = width
+	}
+	bar := strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+	return styleFg.Render(bar) + styleMuted.Render(fmt.Sprintf(" %3.0f%%", pct*100))
+}
+
+func formatStats(s StatsSnapshot, cfg Config, width int) string {
+	if width < 40 {
+		width = 40
+	}
+	cardW := maxInt(14, (width-6)/4)
+	totalRSS := s.API.RSSBytes + s.Web.RSSBytes
+
+	var b strings.Builder
+	b.WriteString(styleMuted.Render("updated "+s.At.Format("15:04:05")) + "\n\n")
+
+	// Summary cards row
+	rpMem := "—"
+	if s.Redpanda.Running {
+		rpMem = s.Redpanda.MemUsage
+		if i := strings.Index(rpMem, " /"); i > 0 {
+			rpMem = strings.TrimSpace(rpMem[:i])
+		}
+	}
+	cards := lipgloss.JoinHorizontal(lipgloss.Top,
+		miniCard("api rss", formatBytes(s.API.RSSBytes), cardW),
+		miniCard("web rss", formatBytes(s.Web.RSSBytes), cardW),
+		miniCard("redpanda", rpMem, cardW),
+		miniCard("data/", formatBytes(s.Disk.DataDir), cardW),
+	)
+	b.WriteString(cards + "\n")
+
+	if s.Host.TotalRAM > 0 && totalRSS > 0 {
+		pct := float64(totalRSS) / float64(s.Host.TotalRAM)
+		b.WriteString("\n")
+		b.WriteString(styleSectionTitle.Render("api+web vs host ram") + "\n")
+		b.WriteString(progressBar(pct, maxInt(10, width-12)) + "\n")
+		b.WriteString(styleMuted.Render(fmt.Sprintf("  %s / %s", formatBytes(totalRSS), formatBytes(s.Host.TotalRAM))) + "\n")
+	}
 
 	writeProc := func(title string, p ProcUsage) {
-		b.WriteString(strings.ToUpper(title) + "\n")
+		b.WriteString("\n" + styleSectionTitle.Render(title) + "\n")
 		if !p.Running && p.PID == 0 {
-			b.WriteString("  status      stopped\n\n")
+			b.WriteString(styleMuted.Render("  stopped") + "\n")
 			return
 		}
 		status := "running"
 		if !p.Running {
 			status = "idle"
 		}
-		b.WriteString(fmt.Sprintf("  status      %s\n", status))
-		b.WriteString(fmt.Sprintf("  pid/pgid    %d / %d\n", p.PID, p.PGID))
-		b.WriteString(fmt.Sprintf("  procs       %d  (process group)\n", p.Procs))
-		b.WriteString(fmt.Sprintf("  rss         %s\n", formatBytes(p.RSSBytes)))
-		b.WriteString(fmt.Sprintf("  cpu         %.1f%%\n", p.CPUPct))
+		b.WriteString(fmt.Sprintf("  %-10s %s\n", "status", badgeForState(status)))
+		b.WriteString(fmt.Sprintf("  %-10s %d / %d\n", "pid/pgid", p.PID, p.PGID))
+		b.WriteString(fmt.Sprintf("  %-10s %d\n", "procs", p.Procs))
+		b.WriteString(fmt.Sprintf("  %-10s %s\n", "rss", formatBytes(p.RSSBytes)))
+		b.WriteString(fmt.Sprintf("  %-10s %.1f%%\n", "cpu", p.CPUPct))
 		if p.Elapsed != "" {
-			b.WriteString(fmt.Sprintf("  uptime      %s\n", p.Elapsed))
+			b.WriteString(fmt.Sprintf("  %-10s %s\n", "uptime", p.Elapsed))
 		}
 		if p.Comm != "" {
-			b.WriteString(fmt.Sprintf("  command     %s\n", p.Comm))
+			b.WriteString(fmt.Sprintf("  %-10s %s\n", "command", p.Comm))
 		}
 		if p.Err != "" {
-			b.WriteString(fmt.Sprintf("  note        %s\n", p.Err))
+			b.WriteString(styleMuted.Render(fmt.Sprintf("  %-10s %s", "note", p.Err)) + "\n")
 		}
-		b.WriteString("\n")
 	}
-	writeProc("api", s.API)
-	writeProc("web", s.Web)
+	writeProc("Processes · api", s.API)
+	writeProc("Processes · web", s.Web)
 
-	b.WriteString("REDPANDA (docker)\n")
+	b.WriteString("\n" + styleSectionTitle.Render("Docker · redpanda") + "\n")
 	if !s.Redpanda.Running {
 		msg := "not running"
 		if s.Redpanda.Err != "" {
 			msg = s.Redpanda.Err
 		}
-		b.WriteString(fmt.Sprintf("  status      %s\n\n", msg))
+		b.WriteString(styleMuted.Render("  "+msg) + "\n")
 	} else {
-		b.WriteString(fmt.Sprintf("  name        %s\n", s.Redpanda.Name))
-		b.WriteString(fmt.Sprintf("  cpu         %s\n", s.Redpanda.CPUPct))
-		b.WriteString(fmt.Sprintf("  memory      %s  (%s)\n", s.Redpanda.MemUsage, s.Redpanda.MemPct))
-		b.WriteString(fmt.Sprintf("  net i/o     %s\n", s.Redpanda.NetIO))
-		b.WriteString(fmt.Sprintf("  block i/o   %s\n", s.Redpanda.BlockIO))
-		b.WriteString(fmt.Sprintf("  pids        %s\n\n", s.Redpanda.PIDs))
+		b.WriteString(fmt.Sprintf("  %-10s %s\n", "name", s.Redpanda.Name))
+		b.WriteString(fmt.Sprintf("  %-10s %s\n", "cpu", s.Redpanda.CPUPct))
+		b.WriteString(fmt.Sprintf("  %-10s %s (%s)\n", "memory", s.Redpanda.MemUsage, s.Redpanda.MemPct))
+		b.WriteString(fmt.Sprintf("  %-10s %s\n", "net i/o", s.Redpanda.NetIO))
+		b.WriteString(fmt.Sprintf("  %-10s %s\n", "block i/o", s.Redpanda.BlockIO))
+		b.WriteString(fmt.Sprintf("  %-10s %s\n", "pids", s.Redpanda.PIDs))
 	}
 
-	b.WriteString("STORAGE\n")
-	b.WriteString(fmt.Sprintf("  data/       %s\n", formatBytes(s.Disk.DataDir)))
-	b.WriteString(fmt.Sprintf("  events/     %s  (%d files)\n", formatBytes(s.Disk.EventsDir), s.Disk.EventFiles))
-	b.WriteString(fmt.Sprintf("  sqlite      %s  (db+shm+wal)\n", formatBytes(s.Disk.SQLite)))
+	b.WriteString("\n" + styleSectionTitle.Render("Storage") + "\n")
+	b.WriteString(fmt.Sprintf("  %-10s %s\n", "data/", formatBytes(s.Disk.DataDir)))
+	b.WriteString(fmt.Sprintf("  %-10s %s (%d files)\n", "events/", formatBytes(s.Disk.EventsDir), s.Disk.EventFiles))
+	b.WriteString(fmt.Sprintf("  %-10s %s\n", "sqlite", formatBytes(s.Disk.SQLite)))
 	if s.Disk.DataFree > 0 {
-		b.WriteString(fmt.Sprintf("  disk free   %s  (volume for data/)\n", formatBytes(s.Disk.DataFree)))
+		b.WriteString(fmt.Sprintf("  %-10s %s\n", "disk free", formatBytes(s.Disk.DataFree)))
 	}
-	b.WriteString(fmt.Sprintf("  root        %s\n", cfg.Root))
+	b.WriteString(fmt.Sprintf("  %-10s %s\n", "root", cfg.Root))
 	if s.Disk.Err != "" {
-		b.WriteString(fmt.Sprintf("  note        %s\n", s.Disk.Err))
+		b.WriteString(styleMuted.Render("  note       "+s.Disk.Err) + "\n")
 	}
 
-	totalRSS := s.API.RSSBytes + s.Web.RSSBytes
-	b.WriteString("\nSUMMARY\n")
-	b.WriteString(fmt.Sprintf("  api+web rss %s\n", formatBytes(totalRSS)))
-	b.WriteString(fmt.Sprintf("  data total  %s\n", formatBytes(s.Disk.DataDir)))
+	b.WriteString("\n" + styleSectionTitle.Render("Host") + "\n")
+	b.WriteString(fmt.Sprintf("  %-10s %s/%s\n", "os", s.Host.GOOS, s.Host.GOARCH))
+	b.WriteString(fmt.Sprintf("  %-10s %d\n", "cpus", s.Host.NumCPU))
+	if s.Host.TotalRAM > 0 {
+		b.WriteString(fmt.Sprintf("  %-10s %s\n", "total ram", formatBytes(s.Host.TotalRAM)))
+	}
+
 	return b.String()
 }

@@ -63,6 +63,31 @@ http://a1b2c3d4e5f6789012345678abcdef01@localhost:8080/1
 
 Point any official Sentry SDK at this DSN (only change the host/path).
 
+You can also create projects in the UI (Projects → New project). Copy the returned DSN into your SDK.
+
+### Environment, release, and tags
+
+These are **not** set in the triage UI — they arrive on each event from the SDK:
+
+```ts
+Sentry.init({
+  dsn: '...',
+  environment: 'production',
+  release: 'my-app@1.2.3',
+})
+
+Sentry.captureException(err, {
+  tags: { service: 'api' },
+  user: { id: 'user-1' },
+})
+```
+
+Issue filters (environment / release / tag dropdowns) read distinct values already stored from ingested events.
+
+### Telegram alerts
+
+Channel `telegram` stores `botToken|chatId`. Message your bot once (so you know the chat id), then create the rule — sentry-lite sends a “connected” sample message and fails create if Telegram rejects it.
+
 ## Smoke test (Node SDK + Bun)
 
 ```bash
@@ -87,9 +112,9 @@ On launch it runs:
 2. `bun run dev` in `web/`
 3. `go run ./cmd/sentry-lite`
 
-Left sidebar panels: `1` redpanda · `2` api · `3` web · `4` stats (live RAM/CPU/disk).
+Left sidebar panels: redpanda · api · web · stats (live RAM/CPU/disk cards).
 
-Keys: `1–4` select · `tab` cycle · `a` restart all · `s` restart · `x` stop · `r` refresh stats · `q` quit (stops API + web; leaves Redpanda running)
+Keys: `↑`/`↓` select service · `j`/`k` scroll · `1–4` / `tab` shortcuts · `a` restart all · `s` restart · `x` stop · `r` refresh stats · `q` quit (stops API + web; leaves Redpanda running). Mouse wheel scrolls the log/stats pane.
 
 ## API surface
 
@@ -98,13 +123,15 @@ Keys: `1–4` select · `tab` cycle · `a` restart all · `s` restart · `x` sto
 | `POST /api/{project_id}/envelope/` | Sentry envelope ingest |
 | `POST /api/{project_id}/store/` | Legacy JSON store |
 | `GET /api/internal/projects` | Project list |
+| `POST /api/internal/projects` | Create project `{ name, slug? }` → project + DSN |
+| `GET /api/internal/facets` | Distinct env/release/tag values (`project_id` optional) |
 | `GET /api/internal/issues` | Issue list (`project_id`, `environment`, `release`, `q`, `tag`/`tag_key`+`tag_value`, `from`, `to`) |
 | `GET /api/internal/issues/{id}` | Issue + latest event |
 | `PATCH /api/internal/issues/{id}` | `{ "status": "open\|resolved\|ignored", "assignee": "..." }` |
 | `GET /api/internal/releases?project_id=` | Release health (issue/event counts) |
 | `POST /api/internal/releases` | Register release `{ project_id, version, ref?, url? }` |
 | `GET /api/internal/alerts?project_id=` | Alert rules |
-| `POST /api/internal/alerts` | Create rule (`new_issue` / `regressed_issue` / `error_volume`; `slack` / `email` / `webhook`) |
+| `POST /api/internal/alerts` | Create rule (`slack` / `email` / `webhook` / `telegram`) |
 | `GET /healthz` | Health check |
 
 Release CLI:

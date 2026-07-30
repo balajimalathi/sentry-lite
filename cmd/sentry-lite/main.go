@@ -71,7 +71,7 @@ func main() {
 	ingestHandler := &ingest.Handler{Store: st, Bus: b}
 	ingestHandler.Routes(r)
 
-	apiHandler := &api.Handler{Store: st}
+	apiHandler := &api.Handler{Store: st, PublicURL: cfg.PublicURL}
 	apiHandler.Routes(r)
 
 	serveSPA(r, cfg.WebDist)

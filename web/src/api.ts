@@ -7,6 +7,19 @@ export type Project = {
   created_at: string
 }
 
+export type CreatedProject = {
+  project: Project
+  public_key: string
+  secret_key: string
+  dsn: string
+}
+
+export type Facets = {
+  environments: string[]
+  releases: string[]
+  tags: string[]
+}
+
 export type Issue = {
   id: number
   project_id: number
@@ -91,12 +104,23 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `${res.status} ${res.statusText}`)
+  }
   return res.json()
 }
 
 export const api = {
   projects: () => get<Project[]>('/api/internal/projects'),
+  createProject: (body: { name: string; slug?: string }) =>
+    post<CreatedProject>('/api/internal/projects', body),
+  facets: (projectId?: string) =>
+    get<Facets>(
+      projectId
+        ? `/api/internal/facets?project_id=${projectId}`
+        : '/api/internal/facets'
+    ),
   issues: (params: Record<string, string>) => {
     const q = new URLSearchParams()
     Object.entries(params).forEach(([k, v]) => {

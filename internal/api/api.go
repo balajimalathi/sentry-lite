@@ -7,15 +7,19 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skndan/sentry-lite/internal/alerts"
 	"github.com/skndan/sentry-lite/internal/store"
 )
 
 type Handler struct {
-	Store *store.Store
+	Store     *store.Store
+	PublicURL string
 }
 
 func (h *Handler) Routes(r chi.Router) {
 	r.Get("/api/internal/projects", h.ListProjects)
+	r.Post("/api/internal/projects", h.CreateProject)
+	r.Get("/api/internal/facets", h.ListFacets)
 	r.Get("/api/internal/issues", h.ListIssues)
 	r.Get("/api/internal/issues/{id}", h.GetIssue)
 	r.Get("/api/internal/issues/{id}/events", h.ListEvents)
@@ -40,6 +44,37 @@ func (h *Handler) ListProjects(w http.ResponseWriter, r *http.Request) {
 		projects = []store.Project{}
 	}
 	writeJSON(w, projects)
+}
+
+func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name string `json:"name"`
+		Slug string `json:"slug"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	created, err := h.Store.CreateProject(r.Context(), body.Name, body.Slug, h.PublicURL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, created)
+}
+
+func (h *Handler) ListFacets(w http.ResponseWriter, r *http.Request) {
+	var projectID int64
+	if v := r.URL.Query().Get("project_id"); v != "" {
+		projectID, _ = strconv.ParseInt(v, 10, 64)
+	}
+	facets, err := h.Store.ListFacets(r.Context(), projectID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, facets)
 }
 
 func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
@@ -231,7 +266,7 @@ func (h *Handler) CreateAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch body.Channel {
-	case "slack", "email", "webhook":
+	case "slack", "email", "webhook", "telegram":
 	default:
 		http.Error(w, "invalid channel", http.StatusBadRequest)
 		return
@@ -239,6 +274,12 @@ func (h *Handler) CreateAlert(w http.ResponseWriter, r *http.Request) {
 	if body.ProjectID <= 0 || body.Name == "" || body.Target == "" {
 		http.Error(w, "project_id, name, target required", http.StatusBadRequest)
 		return
+	}
+	if body.Channel == "telegram" {
+		if err := alerts.SendTelegramConnectTest(r.Context(), body.Target); err != nil {
+			http.Error(w, "telegram connect failed: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	body.Enabled = true
 	rule, err := h.Store.CreateAlertRule(r.Context(), body)

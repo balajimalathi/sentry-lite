@@ -77,9 +77,57 @@ func (d *Dispatcher) deliver(ctx context.Context, rule store.AlertRule, ev Event
 			fmt.Sprintf("%s\n%s\n%s\n", ev.Title, ev.Summary, link))
 	case "webhook":
 		return d.webhook(ctx, rule, body)
+	case "telegram":
+		token, chatID, err := ParseTelegramTarget(rule.Target)
+		if err != nil {
+			return err
+		}
+		return SendTelegram(ctx, token, chatID,
+			fmt.Sprintf("sentry-lite: %s\n%s\n%s", ev.Title, ev.Summary, link))
 	default:
 		return fmt.Errorf("unknown channel %s", rule.Channel)
 	}
+}
+
+// ParseTelegramTarget expects "botToken|chatId".
+func ParseTelegramTarget(target string) (token, chatID string, err error) {
+	parts := strings.SplitN(target, "|", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", fmt.Errorf("telegram target must be botToken|chatId")
+	}
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
+}
+
+// SendTelegram posts a message via Bot API.
+func SendTelegram(ctx context.Context, token, chatID, text string) error {
+	url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", token)
+	payload, _ := json.Marshal(map[string]any{
+		"chat_id": chatID,
+		"text":    text,
+	})
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode >= 300 {
+		return fmt.Errorf("telegram status %d", res.StatusCode)
+	}
+	return nil
+}
+
+// SendTelegramConnectTest sends the first-connect sample message.
+func SendTelegramConnectTest(ctx context.Context, target string) error {
+	token, chatID, err := ParseTelegramTarget(target)
+	if err != nil {
+		return err
+	}
+	return SendTelegram(ctx, token, chatID, "sentry-lite connected — Telegram alerts are ready.")
 }
 
 func (d *Dispatcher) slack(ctx context.Context, url, text string) error {
