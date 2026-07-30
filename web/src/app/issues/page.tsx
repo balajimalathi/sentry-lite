@@ -1,19 +1,23 @@
 import { useMemo } from 'react'
-import { Link, useSearchParams } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import {
-  flexRender,
-  getCoreRowModel,
-  getSortedRowModel,
-  useReactTable,
-  type ColumnDef,
-  type SortingState,
-} from '@tanstack/react-table'
-import { useState } from 'react'
+import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
 import { AlertCircleIcon, SearchIcon } from 'lucide-react'
+import {
+  parseAsArrayOf,
+  parseAsString,
+  parseAsStringEnum,
+  useQueryState,
+  useQueryStates,
+} from 'nuqs'
 import { api, formatTime, type Issue } from '@/api'
-import { DateTimePicker } from '@/components/date-time-picker'
-import { statusVariant } from '@/lib/status'
+import { DataTable } from '@/components/data-table/data-table'
+import { DataTableAdvancedToolbar } from '@/components/data-table/data-table-advanced-toolbar'
+import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
+import { DataTableFilterList } from '@/components/data-table/data-table-filter-list'
+import { DataTableFilterMenu } from '@/components/data-table/data-table-filter-menu'
+import { DataTableSortList } from '@/components/data-table/data-table-sort-list'
+import { DataTableToolbar } from '@/components/data-table/data-table-toolbar'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -23,50 +27,90 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from '@/components/ui/empty'
-import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { useDataTable } from '@/hooks/use-data-table'
 import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+  applyAdvancedIssueFilters,
+  columnFiltersToIssueParams,
+} from '@/lib/issue-filters'
+import { getFiltersStateParser } from '@/lib/parsers'
+import { statusVariant } from '@/lib/status'
+import type { ExtendedColumnFilter, JoinOperator } from '@/types/data-table'
 
-const ALL = 'all'
+type FilterMode = 'basic' | 'advanced' | 'command'
+
+const BASIC_FILTER_KEYS = [
+  'title',
+  'status',
+  'project_id',
+  'environment',
+  'release',
+  'tag',
+  'last_seen',
+] as const
 
 export default function IssuesPage() {
-  const [params, setParams] = useSearchParams()
-  const [sorting, setSorting] = useState<SortingState>([
-    { id: 'last_seen', desc: true },
-  ])
+  const [filterMode, setFilterMode] = useQueryState(
+    'filterMode',
+    parseAsStringEnum<FilterMode>(['basic', 'advanced', 'command']).withDefault(
+      'basic'
+    )
+  )
 
-  const projectId = params.get('project_id') ?? ''
-  const environment = params.get('environment') ?? ''
-  const release = params.get('release') ?? ''
-  const q = params.get('q') ?? ''
-  const tag = params.get('tag') ?? ''
-  const from = params.get('from') ?? ''
-  const to = params.get('to') ?? ''
+  const [advancedFilters] = useQueryState(
+    'filters',
+    getFiltersStateParser<Issue>().withDefault([])
+  )
+  const [joinOperator] = useQueryState(
+    'joinOperator',
+    parseAsStringEnum<JoinOperator>(['and', 'or']).withDefault('and')
+  )
 
-  function patchParams(patch: Record<string, string>) {
-    const next = new URLSearchParams(params)
-    Object.entries(patch).forEach(([k, v]) => {
-      if (!v || v === ALL) next.delete(k)
-      else next.set(k, v)
-    })
-    setParams(next)
-  }
+  const [basicFilterValues] = useQueryStates({
+    title: parseAsString,
+    status: parseAsArrayOf(parseAsString, ','),
+    project_id: parseAsArrayOf(parseAsString, ','),
+    environment: parseAsArrayOf(parseAsString, ','),
+    release: parseAsArrayOf(parseAsString, ','),
+    tag: parseAsArrayOf(parseAsString, ','),
+    last_seen: parseAsString,
+  })
+
+  const basicColumnFilters = useMemo<ColumnFiltersState>(() => {
+    const filters: ColumnFiltersState = []
+    for (const key of BASIC_FILTER_KEYS) {
+      const value = basicFilterValues[key]
+      if (value == null || value === '') continue
+      if (key === 'last_seen' && typeof value === 'string') {
+        try {
+          const parsed = JSON.parse(value) as unknown
+          filters.push({
+            id: key,
+            value: Array.isArray(parsed) ? parsed : [value],
+          })
+        } catch {
+          const parts = value.split(',').filter(Boolean)
+          filters.push({ id: key, value: parts.length > 1 ? parts : value })
+        }
+        continue
+      }
+      filters.push({ id: key, value })
+    }
+    return filters
+  }, [basicFilterValues])
+
+  const apiParams = useMemo(
+    () =>
+      columnFiltersToIssueParams({
+        mode: filterMode,
+        columnFilters: basicColumnFilters,
+        advancedFilters: advancedFilters as ExtendedColumnFilter<Issue>[],
+      }),
+    [filterMode, basicColumnFilters, advancedFilters]
+  )
+
+  const projectIdForFacets = apiParams.project_id ?? ''
 
   const projectsQuery = useQuery({
     queryKey: ['projects'],
@@ -74,29 +118,58 @@ export default function IssuesPage() {
   })
 
   const facetsQuery = useQuery({
-    queryKey: ['facets', projectId],
-    queryFn: () => api.facets(projectId || undefined),
+    queryKey: ['facets', projectIdForFacets],
+    queryFn: () => api.facets(projectIdForFacets || undefined),
+    placeholderData: (previousData) => previousData,
   })
 
   const issuesQuery = useQuery({
-    queryKey: ['issues', { projectId, environment, release, q, tag, from, to }],
-    queryFn: () =>
-      api.issues({
-        project_id: projectId,
-        environment,
-        release,
-        q,
-        tag,
-        from,
-        to,
-      }),
+    queryKey: ['issues', apiParams],
+    queryFn: () => api.issues(apiParams),
   })
+
+  const projects = projectsQuery.data ?? []
+  const facets = facetsQuery.data
+
+  const projectOptions = useMemo(
+    () => projects.map((p) => ({ label: p.name, value: String(p.id) })),
+    [projects]
+  )
+  const envOptions = useMemo(
+    () => (facets?.environments ?? []).map((v) => ({ label: v, value: v })),
+    [facets]
+  )
+  const releaseOptions = useMemo(
+    () => (facets?.releases ?? []).map((v) => ({ label: v, value: v })),
+    [facets]
+  )
+  const tagOptions = useMemo(
+    () => (facets?.tags ?? []).map((v) => ({ label: v, value: v })),
+    [facets]
+  )
+  const statusOptions = useMemo(
+    () =>
+      ['open', 'resolved', 'ignored'].map((v) => ({
+        label: v,
+        value: v,
+      })),
+    []
+  )
 
   const columns = useMemo<ColumnDef<Issue>[]>(
     () => [
       {
+        id: 'title',
         accessorKey: 'title',
-        header: 'Title',
+        enableColumnFilter: true,
+        meta: {
+          label: 'Title',
+          placeholder: 'Search titles...',
+          variant: 'text',
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Title" />
+        ),
         cell: ({ row }) => (
           <div className="flex max-w-xs flex-wrap items-center gap-2 whitespace-normal">
             <Link
@@ -112,8 +185,17 @@ export default function IssuesPage() {
         ),
       },
       {
+        id: 'status',
         accessorKey: 'status',
-        header: 'Status',
+        enableColumnFilter: true,
+        meta: {
+          label: 'Status',
+          variant: 'select',
+          options: statusOptions,
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Status" />
+        ),
         cell: ({ row }) => (
           <Badge variant={statusVariant(row.original.status)}>
             {row.original.status}
@@ -121,9 +203,102 @@ export default function IssuesPage() {
         ),
       },
       {
+        id: 'project_id',
+        accessorKey: 'project_id',
+        enableColumnFilter: true,
+        enableHiding: true,
+        meta: {
+          label: 'Project',
+          variant: 'select',
+          options: projectOptions,
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Project" />
+        ),
+        cell: ({ row }) => {
+          const project = projects.find((p) => p.id === row.original.project_id)
+          return (
+            <span className="text-muted-foreground">
+              {project?.name ?? row.original.project_id}
+            </span>
+          )
+        },
+        filterFn: (row, _id, value) => {
+          const selected = Array.isArray(value)
+            ? value.map(String)
+            : [String(value)]
+          return selected.includes(String(row.original.project_id))
+        },
+      },
+      {
+        id: 'environment',
+        accessorFn: (r) => r.environments ?? [],
+        enableColumnFilter: true,
+        enableHiding: true,
+        meta: {
+          label: 'Environment',
+          variant: 'select',
+          options: envOptions,
+        },
+        filterFn: (row, _id, value) => {
+          const selected = Array.isArray(value)
+            ? value.map(String)
+            : [String(value)]
+          const envs = row.original.environments ?? []
+          return selected.some((v) => envs.includes(v))
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Environment" />
+        ),
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">
+            {(row.original.environments ?? []).join(', ') || '—'}
+          </span>
+        ),
+      },
+      {
+        id: 'release',
+        accessorFn: (r) => r.last_release ?? r.first_release ?? '',
+        enableColumnFilter: true,
+        enableHiding: true,
+        meta: {
+          label: 'Release',
+          variant: 'select',
+          options: releaseOptions,
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Release" />
+        ),
+        cell: ({ row }) => (
+          <span className="font-mono text-muted-foreground text-xs">
+            {row.original.last_release ?? row.original.first_release ?? '—'}
+          </span>
+        ),
+      },
+      {
+        id: 'tag',
+        accessorFn: () => '',
+        enableColumnFilter: true,
+        enableSorting: false,
+        enableHiding: true,
+        meta: {
+          label: 'Tag',
+          variant: 'select',
+          options: tagOptions,
+        },
+        filterFn: () => true,
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Tag" />
+        ),
+        cell: () => <span className="text-muted-foreground">—</span>,
+      },
+      {
         id: 'owner',
         accessorFn: (r) => r.assignee ?? '',
-        header: 'Owner',
+        meta: { label: 'Owner' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Owner" />
+        ),
         cell: ({ row }) => (
           <span className="text-muted-foreground">
             {row.original.assignee || '—'}
@@ -131,12 +306,20 @@ export default function IssuesPage() {
         ),
       },
       {
+        id: 'count',
         accessorKey: 'count',
-        header: 'Count',
+        meta: { label: 'Count' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Count" />
+        ),
       },
       {
+        id: 'first_seen',
         accessorKey: 'first_seen',
-        header: 'First seen',
+        meta: { label: 'First seen' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="First seen" />
+        ),
         cell: ({ row }) => (
           <span className="text-muted-foreground">
             {formatTime(row.original.first_seen)}
@@ -144,8 +327,16 @@ export default function IssuesPage() {
         ),
       },
       {
+        id: 'last_seen',
         accessorKey: 'last_seen',
-        header: 'Last seen',
+        enableColumnFilter: true,
+        meta: {
+          label: 'Last seen',
+          variant: 'dateRange',
+        },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Last seen" />
+        ),
         cell: ({ row }) => (
           <span className="text-muted-foreground">
             {formatTime(row.original.last_seen)}
@@ -153,8 +344,12 @@ export default function IssuesPage() {
         ),
       },
       {
+        id: 'culprit',
         accessorKey: 'culprit',
-        header: 'Culprit',
+        meta: { label: 'Culprit' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Culprit" />
+        ),
         cell: ({ row }) => (
           <span className="max-w-[12rem] truncate font-mono text-muted-foreground">
             {row.original.culprit || '—'}
@@ -162,37 +357,47 @@ export default function IssuesPage() {
         ),
       },
     ],
-    []
+    [
+      statusOptions,
+      projectOptions,
+      envOptions,
+      releaseOptions,
+      tagOptions,
+      projects,
+    ]
   )
 
-  const issues = issuesQuery.data ?? []
-  const table = useReactTable({
+  const rawIssues = issuesQuery.data ?? []
+  const issues = useMemo(() => {
+    if (filterMode === 'basic') return rawIssues
+    return applyAdvancedIssueFilters(
+      rawIssues,
+      advancedFilters as ExtendedColumnFilter<Issue>[],
+      joinOperator
+    )
+  }, [filterMode, rawIssues, advancedFilters, joinOperator])
+
+  const enableAdvancedFilter = filterMode !== 'basic'
+
+  const { table } = useDataTable({
     data: issues,
     columns,
-    state: { sorting },
-    onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(),
-    getSortedRowModel: getSortedRowModel(),
+    pageCount: -1,
+    enableAdvancedFilter,
+    manualFiltering: false,
+    manualPagination: false,
+    manualSorting: false,
+    initialState: {
+      sorting: [{ id: 'last_seen', desc: true }],
+      pagination: { pageIndex: 0, pageSize: 20 },
+      columnVisibility: {
+        project_id: false,
+        environment: false,
+        release: false,
+        tag: false,
+      },
+    },
   })
-
-  const projects = projectsQuery.data ?? []
-  const facets = facetsQuery.data
-  const projectItems = [
-    { label: 'All projects', value: ALL },
-    ...projects.map((p) => ({ label: p.name, value: String(p.id) })),
-  ]
-  const envItems = [
-    { label: 'All environments', value: ALL },
-    ...(facets?.environments ?? []).map((v) => ({ label: v, value: v })),
-  ]
-  const releaseItems = [
-    { label: 'All releases', value: ALL },
-    ...(facets?.releases ?? []).map((v) => ({ label: v, value: v })),
-  ]
-  const tagItems = [
-    { label: 'All tags', value: ALL },
-    ...(facets?.tags ?? []).map((v) => ({ label: v, value: v })),
-  ]
 
   const error = issuesQuery.error ? String(issuesQuery.error) : ''
 
@@ -208,189 +413,64 @@ export default function IssuesPage() {
 
   return (
     <section className="flex flex-col gap-4">
-      <div className="flex flex-col gap-1">
-        <h1 className="font-heading text-2xl font-medium tracking-tight">
-          Issues
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Filter by project, environment, release, tag, and timeframe.
-        </p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-1">
+          <h1 className="font-heading text-2xl font-medium tracking-tight">
+            Issues
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Filter with toolbar chips, advanced rules, or a command menu.
+          </p>
+        </div>
+        <ToggleGroup
+          value={[filterMode]}
+          onValueChange={(value) => {
+            const next = value[0] as FilterMode | undefined
+            if (next) void setFilterMode(next)
+          }}
+          variant="outline"
+          size="sm"
+        >
+          <ToggleGroupItem value="basic">Filters</ToggleGroupItem>
+          <ToggleGroupItem value="advanced">Advanced filters</ToggleGroupItem>
+          <ToggleGroupItem value="command">Command filters</ToggleGroupItem>
+        </ToggleGroup>
       </div>
-
-      <FieldGroup className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <Field>
-          <FieldLabel>Project</FieldLabel>
-          <Select
-            items={projectItems}
-            value={projectId || ALL}
-            onValueChange={(v) =>
-              patchParams({ project_id: v == null ? '' : String(v) })
-            }
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false} align="start">
-              <SelectGroup>
-                {projectItems.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
-
-        <Field>
-          <FieldLabel>Environment</FieldLabel>
-          <Select
-            items={envItems}
-            value={environment || ALL}
-            onValueChange={(v) =>
-              patchParams({ environment: v == null ? '' : String(v) })
-            }
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false} align="start">
-              <SelectGroup>
-                {envItems.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
-
-        <Field>
-          <FieldLabel>Release</FieldLabel>
-          <Select
-            items={releaseItems}
-            value={release || ALL}
-            onValueChange={(v) =>
-              patchParams({ release: v == null ? '' : String(v) })
-            }
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false} align="start">
-              <SelectGroup>
-                {releaseItems.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
-
-        <Field>
-          <FieldLabel>Tag</FieldLabel>
-          <Select
-            items={tagItems}
-            value={tag || ALL}
-            onValueChange={(v) =>
-              patchParams({ tag: v == null ? '' : String(v) })
-            }
-          >
-            <SelectTrigger className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false} align="start">
-              <SelectGroup>
-                {tagItems.map((item) => (
-                  <SelectItem key={item.value} value={item.value}>
-                    {item.label}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
-        </Field>
-
-        <Field>
-          <FieldLabel htmlFor="q">Search</FieldLabel>
-          <Input
-            id="q"
-            value={q}
-            onChange={(e) => patchParams({ q: e.target.value })}
-            placeholder="title, culprit, or message"
-          />
-        </Field>
-
-        <DateTimePicker
-          label="From"
-          value={from}
-          onChange={(v) => patchParams({ from: v })}
-        />
-        <DateTimePicker
-          label="To"
-          value={to}
-          onChange={(v) => patchParams({ to: v })}
-        />
-      </FieldGroup>
 
       {issuesQuery.isLoading ? (
         <Skeleton className="h-48 w-full" />
-      ) : issues.length === 0 ? (
-        <Empty className="border border-dashed">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <SearchIcon />
-            </EmptyMedia>
-            <EmptyTitle>No issues found</EmptyTitle>
-            <EmptyDescription>
-              No issues match these filters.
-            </EmptyDescription>
-          </EmptyHeader>
-        </Empty>
       ) : (
-        <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">
-          <Table>
-            <TableHeader>
-              {table.getHeaderGroups().map((hg) => (
-                <TableRow key={hg.id}>
-                  {hg.headers.map((header) => (
-                    <TableHead
-                      key={header.id}
-                      className={
-                        header.column.getCanSort()
-                          ? 'cursor-pointer select-none'
-                          : undefined
-                      }
-                      onClick={header.column.getToggleSortingHandler()}
-                    >
-                      {flexRender(
-                        header.column.columnDef.header,
-                        header.getContext()
-                      )}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHeader>
-            <TableBody>
-              {table.getRowModel().rows.map((row) => (
-                <TableRow key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext()
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
+        <>
+          <DataTable table={table}>
+            {filterMode === 'basic' ? (
+              <DataTableToolbar table={table}>
+                <DataTableSortList table={table} />
+              </DataTableToolbar>
+            ) : (
+              <DataTableAdvancedToolbar table={table}>
+                {filterMode === 'advanced' ? (
+                  <DataTableFilterList table={table} />
+                ) : (
+                  <DataTableFilterMenu table={table} />
+                )}
+                <DataTableSortList table={table} />
+              </DataTableAdvancedToolbar>
+            )}
+          </DataTable>
+          {issues.length === 0 && (
+            <Empty className="border border-dashed">
+              <EmptyHeader>
+                <EmptyMedia variant="icon">
+                  <SearchIcon />
+                </EmptyMedia>
+                <EmptyTitle>No issues found</EmptyTitle>
+                <EmptyDescription>
+                  No issues match these filters.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          )}
+        </>
       )}
     </section>
   )

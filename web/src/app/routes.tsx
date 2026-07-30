@@ -1,4 +1,5 @@
-import { createBrowserRouter } from 'react-router-dom'
+import { createBrowserRouter, Outlet } from 'react-router-dom'
+import { NuqsAdapter } from 'nuqs/adapters/react-router/v7'
 import RootLayout from './layout'
 import HomePage from './page'
 import IssuesPage from './issues/page'
@@ -10,20 +11,33 @@ import TransactionDetailPage from './performance/[name]/page'
 import TracePage from './traces/[traceId]/page'
 import CronsPage from './crons/page'
 
+function NuqsRoot() {
+  return (
+    <NuqsAdapter>
+      <Outlet />
+    </NuqsAdapter>
+  )
+}
+
 export const router = createBrowserRouter([
   {
-    path: '/',
-    element: <RootLayout />,
+    element: <NuqsRoot />,
     children: [
-      { index: true, element: <HomePage /> },
-      { path: 'issues', element: <IssuesPage /> },
-      { path: 'issues/:id', element: <IssueDetailPage /> },
-      { path: 'performance', element: <PerformancePage /> },
-      { path: 'performance/:name', element: <TransactionDetailPage /> },
-      { path: 'traces/:traceId', element: <TracePage /> },
-      { path: 'crons', element: <CronsPage /> },
-      { path: 'releases', element: <ReleasesPage /> },
-      { path: 'alerts', element: <AlertsPage /> },
+      {
+        path: '/',
+        element: <RootLayout />,
+        children: [
+          { index: true, element: <HomePage /> },
+          { path: 'issues', element: <IssuesPage /> },
+          { path: 'issues/:id', element: <IssueDetailPage /> },
+          { path: 'performance', element: <PerformancePage /> },
+          { path: 'performance/:name', element: <TransactionDetailPage /> },
+          { path: 'traces/:traceId', element: <TracePage /> },
+          { path: 'crons', element: <CronsPage /> },
+          { path: 'releases', element: <ReleasesPage /> },
+          { path: 'alerts', element: <AlertsPage /> },
+        ],
+      },
     ],
   },
 ])
