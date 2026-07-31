@@ -40,10 +40,13 @@ TUI resource stats while the API, web UI, and Redpanda are running:
 | React (Vite) UI    | Triage dashboard (Bun to build / develop)            |
 
 
-```
-SDK ──DSN──▶ Go API ──▶ Redpanda ──▶ processor ──▶ SQLite
-                │
-                └── serves UI (+ /api/internal/*)
+```mermaid
+flowchart LR
+  SDK -->|DSN| API[Go API]
+  API --> Redpanda
+  Redpanda --> processor
+  processor --> SQLite
+  API -->|serves| UI["UI + /api/internal/*"]
 ```
 
 
