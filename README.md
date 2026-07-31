@@ -1,3 +1,6 @@
+
+
+
 # sentry-lite
 
 [Status](https://github.com/balajimalathi/sentry-lite)
@@ -10,7 +13,11 @@
 
 ## Demo
 
-[Demo walkthrough](assets/demo.mov) · [Load-test benchmark](assets/benchmark.mov)
+https://github.com/user-attachments/assets/ccf28ae9-fba0-4d52-b418-8d83c45f4546
+
+## Stress Testing
+
+https://github.com/user-attachments/assets/421ef18d-9b75-4632-8188-c905e1420fd8
 
 TUI resource stats while the API, web UI, and Redpanda are running:
 
