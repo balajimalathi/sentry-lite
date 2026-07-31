@@ -11,6 +11,7 @@ import (
 	"log"
 	"net/http"
 	"net/smtp"
+	"net/url"
 	"strings"
 	"time"
 
@@ -58,7 +59,11 @@ func (d *Dispatcher) Handle(ctx context.Context, ev Event) {
 }
 
 func (d *Dispatcher) deliver(ctx context.Context, rule store.AlertRule, ev Event) error {
-	link := fmt.Sprintf("%s/issues/%d", strings.TrimRight(d.APIBase, "/"), ev.IssueID)
+	base := strings.TrimRight(d.APIBase, "/")
+	link := fmt.Sprintf("%s/issues/%d", base, ev.IssueID)
+	if ev.Trigger == "cron_missed" || ev.IssueID == 0 {
+		link = base + "/crons"
+	}
 	body := map[string]any{
 		"rule":       rule.Name,
 		"trigger":    ev.Trigger,
@@ -68,10 +73,15 @@ func (d *Dispatcher) deliver(ctx context.Context, rule store.AlertRule, ev Event
 		"culprit":    ev.Culprit,
 		"summary":    ev.Summary,
 		"issue_url":  link,
+		"url":        link,
 	}
 	switch rule.Channel {
 	case "slack":
-		return d.slack(ctx, rule.Target, fmt.Sprintf("*%s*\n%s\n<%s|View issue>", ev.Title, ev.Summary, link))
+		label := "View issue"
+		if ev.Trigger == "cron_missed" {
+			label = "View crons"
+		}
+		return d.slack(ctx, rule.Target, fmt.Sprintf("*%s*\n%s\n<%s|%s>", ev.Title, ev.Summary, link, label))
 	case "email":
 		return d.email(rule.Target, fmt.Sprintf("[sentry-lite] %s", ev.Title),
 			fmt.Sprintf("%s\n%s\n%s\n", ev.Title, ev.Summary, link))
@@ -161,6 +171,10 @@ func (d *Dispatcher) email(to, subject, body string) error {
 }
 
 func (d *Dispatcher) webhook(ctx context.Context, rule store.AlertRule, body map[string]any) error {
+	// Demo seeds point at example.com; skip the HTTP call so local runs don't spam 405s.
+	if isPlaceholderWebhook(rule.Target) {
+		return nil
+	}
 	raw, _ := json.Marshal(body)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, rule.Target, bytes.NewReader(raw))
 	if err != nil {
@@ -181,4 +195,13 @@ func (d *Dispatcher) webhook(ctx context.Context, rule store.AlertRule, body map
 		return fmt.Errorf("webhook status %d", res.StatusCode)
 	}
 	return nil
+}
+
+func isPlaceholderWebhook(target string) bool {
+	u, err := url.Parse(target)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "example.com" || host == "www.example.com"
 }

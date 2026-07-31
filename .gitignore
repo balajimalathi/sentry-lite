@@ -3,6 +3,10 @@ bin/
 web/dist/
 web/node_modules/
 examples/**/node_modules/
+sample/node_modules/
+sample/.next/
+sample/.env.local
 *.db
 .DS_Store
 .env
+.worktrees/

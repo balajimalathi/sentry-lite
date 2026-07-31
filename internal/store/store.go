@@ -2,22 +2,21 @@ package store
 
 import (
 	"context"
-	"database/sql"
-	"embed"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
+	"gorm.io/gorm/logger"
 )
 
-//go:embed migrations/*.sql
-var migrationFS embed.FS
-
 type Store struct {
-	DB *sql.DB
+	DB *gorm.DB
 }
 
 type ProjectKey struct {
@@ -27,12 +26,13 @@ type ProjectKey struct {
 }
 
 type Project struct {
-	ID               int64   `json:"id"`
-	Slug             string  `json:"slug"`
-	Name             string  `json:"name"`
-	IssueCount       int64   `json:"issue_count"`
-	LatestActivityAt *string `json:"latest_activity_at"`
-	CreatedAt        string  `json:"created_at"`
+	ID               int64    `json:"id"`
+	Slug             string   `json:"slug"`
+	Name             string   `json:"name"`
+	AllowedOrigins   []string `json:"allowed_origins"`
+	IssueCount       int64    `json:"issue_count"`
+	LatestActivityAt *string  `json:"latest_activity_at"`
+	CreatedAt        string   `json:"created_at"`
 }
 
 type Issue struct {
@@ -51,6 +51,7 @@ type Issue struct {
 	Regressed    bool     `json:"regressed"`
 	Assignee     *string  `json:"assignee,omitempty"`
 	Environments []string `json:"environments,omitempty"`
+	Tags         []string `json:"tags,omitempty"`
 }
 
 type Event struct {
@@ -67,6 +68,7 @@ type Event struct {
 	Culprit       *string           `json:"culprit"`
 	UserID        *string           `json:"user_id"`
 	UserEmail     *string           `json:"user_email"`
+	TraceID       *string           `json:"trace_id,omitempty"`
 	RawPath       string            `json:"raw_path"`
 	PayloadJSON   string            `json:"payload_json,omitempty"`
 	Tags          map[string]string `json:"tags,omitempty"`
@@ -86,169 +88,96 @@ type IssueListFilter struct {
 
 const QuietWindow = 24 * time.Hour
 
-
 func Open(path string) (*Store, error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, err
 	}
-	dsn := fmt.Sprintf("file:%s?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)", path)
-	db, err := sql.Open("sqlite", dsn)
+	dsn := fmt.Sprintf("%s?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)", path)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Warn),
+	})
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	s := &Store{DB: db}
-	if err := s.migrate(); err != nil {
-		_ = db.Close()
+	sqlDB, err := db.DB()
+	if err != nil {
 		return nil, err
 	}
-	if err := s.seed(); err != nil {
-		_ = db.Close()
+	sqlDB.SetMaxOpenConns(1)
+
+	s := &Store{DB: db}
+	if err := s.migrate(); err != nil {
+		_ = sqlDB.Close()
 		return nil, err
 	}
 	return s, nil
 }
 
 func (s *Store) Close() error {
-	return s.DB.Close()
+	sqlDB, err := s.DB.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }
 
 func (s *Store) migrate() error {
-	entries, err := migrationFS.ReadDir("migrations")
-	if err != nil {
-		return err
-	}
-	// Sort by name so 001 then 002
-	names := make([]string, 0, len(entries))
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".sql") {
-			names = append(names, e.Name())
-		}
-	}
-	for _, name := range names {
-		b, err := migrationFS.ReadFile("migrations/" + name)
-		if err != nil {
-			return err
-		}
-		for _, stmt := range splitSQL(string(b)) {
-			if _, err := s.DB.Exec(stmt); err != nil {
-				msg := err.Error()
-				if strings.Contains(msg, "duplicate column") || strings.Contains(msg, "already exists") {
-					continue
-				}
-				return fmt.Errorf("migrate %s: %w", name, err)
-			}
-		}
-	}
-	return nil
-}
-
-func splitSQL(s string) []string {
-	parts := strings.Split(s, ";")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		// drop leading/inline comment-only lines
-		lines := strings.Split(p, "\n")
-		var kept []string
-		for _, line := range lines {
-			trim := strings.TrimSpace(line)
-			if trim == "" || strings.HasPrefix(trim, "--") {
-				continue
-			}
-			kept = append(kept, line)
-		}
-		p = strings.TrimSpace(strings.Join(kept, "\n"))
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-const (
-	SeedPublicKey = "a1b2c3d4e5f6789012345678abcdef01"
-	SeedSecretKey = "deadbeefdeadbeefdeadbeefdeadbeef"
-)
-
-func (s *Store) seed() error {
-	var n int
-	if err := s.DB.QueryRow(`SELECT COUNT(*) FROM organizations`).Scan(&n); err != nil {
-		return err
-	}
-	if n > 0 {
-		return nil
-	}
-	tx, err := s.DB.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-
-	res, err := tx.Exec(`INSERT INTO organizations (slug, name) VALUES (?, ?)`, "default", "Default")
-	if err != nil {
-		return err
-	}
-	orgID, _ := res.LastInsertId()
-	res, err = tx.Exec(`INSERT INTO projects (organization_id, slug, name) VALUES (?, ?, ?)`, orgID, "demo", "Demo Project")
-	if err != nil {
-		return err
-	}
-	projectID, _ := res.LastInsertId()
-	_, err = tx.Exec(
-		`INSERT INTO project_keys (project_id, public_key, secret_key) VALUES (?, ?, ?)`,
-		projectID, SeedPublicKey, SeedSecretKey,
-	)
-	if err != nil {
-		return err
-	}
-	return tx.Commit()
+	return s.DB.AutoMigrate(allModels()...)
 }
 
 func (s *Store) LookupProjectKey(ctx context.Context, publicKey string, projectID int64) (*ProjectKey, error) {
-	var pk ProjectKey
-	err := s.DB.QueryRowContext(ctx,
-		`SELECT project_id, public_key, secret_key FROM project_keys WHERE public_key = ? AND project_id = ?`,
-		publicKey, projectID,
-	).Scan(&pk.ProjectID, &pk.PublicKey, &pk.SecretKey)
-	if err == sql.ErrNoRows {
+	var row ProjectKeyRow
+	err := s.DB.WithContext(ctx).
+		Where("public_key = ? AND project_id = ?", publicKey, projectID).
+		First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &pk, nil
+	return &ProjectKey{
+		ProjectID: row.ProjectID,
+		PublicKey: row.PublicKey,
+		SecretKey: row.SecretKey,
+	}, nil
 }
 
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
-	rows, err := s.DB.QueryContext(ctx, `
-		SELECT p.id, p.slug, p.name, p.created_at,
+	type projectScan struct {
+		ID             int64
+		Slug           string
+		Name           string
+		AllowedOrigins string
+		CreatedAt      string
+		IssueCount     int64
+		LatestActivity *string
+	}
+	var rows []projectScan
+	err := s.DB.WithContext(ctx).Raw(`
+		SELECT p.id, p.slug, p.name, p.allowed_origins, p.created_at,
 		       COALESCE((SELECT COUNT(*) FROM issues i WHERE i.project_id = p.id), 0) AS issue_count,
 		       (SELECT MAX(i.last_seen) FROM issues i WHERE i.project_id = p.id) AS latest_activity
 		FROM projects p
 		ORDER BY p.id ASC
-	`)
+	`).Scan(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []Project
-	for rows.Next() {
-		var p Project
-		var latest sql.NullString
-		if err := rows.Scan(&p.ID, &p.Slug, &p.Name, &p.CreatedAt, &p.IssueCount, &latest); err != nil {
-			return nil, err
-		}
-		if latest.Valid {
-			p.LatestActivityAt = &latest.String
-		}
-		out = append(out, p)
+	out := make([]Project, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Project{
+			ID:               r.ID,
+			Slug:             r.Slug,
+			Name:             r.Name,
+			AllowedOrigins:   decodeOriginsJSON(r.AllowedOrigins),
+			IssueCount:       r.IssueCount,
+			LatestActivityAt: r.LatestActivity,
+			CreatedAt:        r.CreatedAt,
+		})
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
 func (s *Store) ListIssues(ctx context.Context, f IssueListFilter) ([]Issue, error) {
@@ -293,112 +222,133 @@ func (s *Store) ListIssues(ctx context.Context, f IssueListFilter) ([]Issue, err
 		i.count, i.first_seen, i.last_seen, i.first_release, i.last_release, i.regressed, i.assignee
 		FROM issues i WHERE ` + strings.Join(conds, " AND ") + ` ORDER BY i.last_seen DESC LIMIT ?`
 
-	rows, err := s.DB.QueryContext(ctx, query, args...)
+	var rows []IssueRow
+	if err := s.DB.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]Issue, 0, len(rows))
+	for i := range rows {
+		out = append(out, issueFromRow(&rows[i]))
+	}
+	if err := s.attachIssueTagFacets(ctx, out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (s *Store) attachIssueTagFacets(ctx context.Context, issues []Issue) error {
+	if len(issues) == 0 {
+		return nil
+	}
+	byID := make(map[int64]int, len(issues))
+	ids := make([]int64, len(issues))
+	for i := range issues {
+		byID[issues[i].ID] = i
+		ids[i] = issues[i].ID
+	}
+	type tagRow struct {
+		IssueID int64
+		Key     string
+		Value   string
+	}
+	var tags []tagRow
+	err := s.DB.WithContext(ctx).Raw(
+		`SELECT DISTINCT issue_id, key, value FROM event_tags WHERE issue_id IN ? ORDER BY key, value`,
+		ids,
+	).Scan(&tags).Error
 	if err != nil {
-		return nil, err
+		return err
 	}
-	defer rows.Close()
-	var out []Issue
-	for rows.Next() {
-		iss, err := scanIssue(rows)
-		if err != nil {
-			return nil, err
+	for _, t := range tags {
+		idx, ok := byID[t.IssueID]
+		if !ok || t.Value == "" {
+			continue
 		}
-		out = append(out, *iss)
+		switch t.Key {
+		case "environment":
+			issues[idx].Environments = append(issues[idx].Environments, t.Value)
+		case "release":
+			// Releases are already on first_release / last_release.
+		default:
+			issues[idx].Tags = append(issues[idx].Tags, t.Key+":"+t.Value)
+		}
 	}
-	return out, rows.Err()
+	return nil
 }
 
-type scannable interface {
-	Scan(dest ...any) error
-}
-
-func scanIssue(row scannable) (*Issue, error) {
-	var iss Issue
-	var firstRel, lastRel, assignee sql.NullString
-	var regressed int
-	if err := row.Scan(
-		&iss.ID, &iss.ProjectID, &iss.Fingerprint, &iss.Title, &iss.Culprit, &iss.Status, &iss.Level,
-		&iss.Count, &iss.FirstSeen, &iss.LastSeen, &firstRel, &lastRel, &regressed, &assignee,
-	); err != nil {
-		return nil, err
+func issueFromRow(row *IssueRow) Issue {
+	return Issue{
+		ID:           row.ID,
+		ProjectID:    row.ProjectID,
+		Fingerprint:  row.Fingerprint,
+		Title:        row.Title,
+		Culprit:      row.Culprit,
+		Status:       row.Status,
+		Level:        row.Level,
+		Count:        row.Count,
+		FirstSeen:    row.FirstSeen,
+		LastSeen:     row.LastSeen,
+		FirstRelease: row.FirstRelease,
+		LastRelease:  row.LastRelease,
+		Regressed:    row.Regressed == 1,
+		Assignee:     row.Assignee,
 	}
-	if firstRel.Valid {
-		iss.FirstRelease = &firstRel.String
-	}
-	if lastRel.Valid {
-		iss.LastRelease = &lastRel.String
-	}
-	if assignee.Valid {
-		iss.Assignee = &assignee.String
-	}
-	iss.Regressed = regressed == 1
-	return &iss, nil
 }
 
 func (s *Store) GetIssue(ctx context.Context, id int64) (*Issue, error) {
-	row := s.DB.QueryRowContext(ctx, `
-		SELECT id, project_id, fingerprint, title, culprit, status, level, count,
-		       first_seen, last_seen, first_release, last_release, regressed, assignee
-		FROM issues WHERE id = ?
-	`, id)
-	iss, err := scanIssue(row)
-	if err == sql.ErrNoRows {
+	var row IssueRow
+	err := s.DB.WithContext(ctx).First(&row, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-
-	rows, err := s.DB.QueryContext(ctx, `
-		SELECT DISTINCT value FROM event_tags WHERE issue_id = ? AND key = 'environment' ORDER BY value
-	`, id)
-	if err != nil {
-		return iss, nil
+	iss := issueFromRow(&row)
+	list := []Issue{iss}
+	if err := s.attachIssueTagFacets(ctx, list); err != nil {
+		return &iss, nil
 	}
-	defer rows.Close()
-	for rows.Next() {
-		var v string
-		if err := rows.Scan(&v); err != nil {
-			return nil, err
-		}
-		iss.Environments = append(iss.Environments, v)
-	}
-	return iss, nil
+	return &list[0], nil
 }
 
 func (s *Store) UpdateIssueStatus(ctx context.Context, id int64, status string) error {
-	if status == "resolved" {
-		_, err := s.DB.ExecContext(ctx,
-			`UPDATE issues SET status = ?, regressed = 0, resolved_at = ? WHERE id = ?`,
-			status, time.Now().UTC().Format(time.RFC3339Nano), id)
-		return err
+	updates := map[string]any{
+		"status":    status,
+		"regressed": 0,
 	}
-	_, err := s.DB.ExecContext(ctx,
-		`UPDATE issues SET status = ?, regressed = 0, resolved_at = NULL WHERE id = ?`,
-		status, id)
-	return err
+	if status == "resolved" {
+		updates["resolved_at"] = time.Now().UTC().Format(time.RFC3339Nano)
+	} else {
+		updates["resolved_at"] = nil
+	}
+	return s.DB.WithContext(ctx).Model(&IssueRow{}).Where("id = ?", id).Updates(updates).Error
 }
 
 func (s *Store) UpdateIssueAssignee(ctx context.Context, id int64, assignee string) error {
-	_, err := s.DB.ExecContext(ctx, `UPDATE issues SET assignee = ? WHERE id = ?`, nullOrNil(assignee), id)
-	return err
+	var val any
+	if assignee == "" {
+		val = nil
+	} else {
+		val = assignee
+	}
+	return s.DB.WithContext(ctx).Model(&IssueRow{}).Where("id = ?", id).Update("assignee", val).Error
 }
 
 func (s *Store) ListEventsForIssue(ctx context.Context, issueID int64, limit int) ([]Event, error) {
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.DB.QueryContext(ctx, `
-		SELECT id, event_id, issue_id, project_id, timestamp, environment, release, platform,
-		       message, exception_type, culprit, user_id, user_email, raw_path, payload_json
-		FROM events WHERE issue_id = ? ORDER BY timestamp DESC LIMIT ?
-	`, issueID, limit)
+	var rows []EventRow
+	err := s.DB.WithContext(ctx).
+		Where("issue_id = ?", issueID).
+		Order("timestamp DESC").
+		Limit(limit).
+		Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	return scanEvents(rows)
+	return eventsFromRows(rows), nil
 }
 
 func (s *Store) GetLatestEvent(ctx context.Context, issueID int64) (*Event, error) {
@@ -419,51 +369,41 @@ func (s *Store) GetLatestEvent(ctx context.Context, issueID int64) (*Event, erro
 }
 
 func (s *Store) GetEventTags(ctx context.Context, eventID string) (map[string]string, error) {
-	rows, err := s.DB.QueryContext(ctx, `SELECT key, value FROM event_tags WHERE event_id = ?`, eventID)
+	var rows []EventTagRow
+	err := s.DB.WithContext(ctx).Where("event_id = ?", eventID).Find(&rows).Error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 	out := map[string]string{}
-	for rows.Next() {
-		var k, v string
-		if err := rows.Scan(&k, &v); err != nil {
-			return nil, err
-		}
-		out[k] = v
+	for _, r := range rows {
+		out[r.Key] = r.Value
 	}
-	return out, rows.Err()
+	return out, nil
 }
 
-func scanEvents(rows *sql.Rows) ([]Event, error) {
-	var out []Event
-	for rows.Next() {
-		var e Event
-		var env, rel, plat, msg, exType, culprit, uid, uemail sql.NullString
-		if err := rows.Scan(
-			&e.ID, &e.EventID, &e.IssueID, &e.ProjectID, &e.Timestamp,
-			&env, &rel, &plat, &msg, &exType, &culprit, &uid, &uemail, &e.RawPath, &e.PayloadJSON,
-		); err != nil {
-			return nil, err
-		}
-		e.Environment = nullStr(env)
-		e.Release = nullStr(rel)
-		e.Platform = nullStr(plat)
-		e.Message = nullStr(msg)
-		e.ExceptionType = nullStr(exType)
-		e.Culprit = nullStr(culprit)
-		e.UserID = nullStr(uid)
-		e.UserEmail = nullStr(uemail)
-		out = append(out, e)
+func eventsFromRows(rows []EventRow) []Event {
+	out := make([]Event, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Event{
+			ID:            r.ID,
+			EventID:       r.EventID,
+			IssueID:       r.IssueID,
+			ProjectID:     r.ProjectID,
+			Timestamp:     r.Timestamp,
+			Environment:   r.Environment,
+			Release:       r.Release,
+			Platform:      r.Platform,
+			Message:       r.Message,
+			ExceptionType: r.ExceptionType,
+			Culprit:       r.Culprit,
+			UserID:        r.UserID,
+			UserEmail:     r.UserEmail,
+			TraceID:       r.TraceID,
+			RawPath:       r.RawPath,
+			PayloadJSON:   r.PayloadJSON,
+		})
 	}
-	return out, rows.Err()
-}
-
-func nullStr(ns sql.NullString) *string {
-	if ns.Valid {
-		return &ns.String
-	}
-	return nil
+	return out
 }
 
 type UpsertEventInput struct {
@@ -481,6 +421,7 @@ type UpsertEventInput struct {
 	ExceptionType string
 	UserID        string
 	UserEmail     string
+	TraceID       string
 	RawPath       string
 	PayloadJSON   string
 	Tags          map[string]string
@@ -493,111 +434,127 @@ type UpsertResult struct {
 }
 
 func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertResult, error) {
-	tx, err := s.DB.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback()
-
+	result := &UpsertResult{}
 	ts := in.Timestamp.UTC().Format(time.RFC3339Nano)
 
-	var issueID int64
-	var status string
-	var firstRelease, lastRelease, resolvedAt sql.NullString
-	err = tx.QueryRowContext(ctx,
-		`SELECT id, status, first_release, last_release, resolved_at FROM issues WHERE project_id = ? AND fingerprint = ?`,
-		in.ProjectID, in.Fingerprint,
-	).Scan(&issueID, &status, &firstRelease, &lastRelease, &resolvedAt)
-
-	result := &UpsertResult{}
-	if err == sql.ErrNoRows {
-		res, err := tx.ExecContext(ctx, `
-			INSERT INTO issues (project_id, fingerprint, title, culprit, status, level, count, first_seen, last_seen, first_release, last_release, regressed)
-			VALUES (?, ?, ?, ?, 'open', ?, 1, ?, ?, ?, ?, 0)
-		`, in.ProjectID, in.Fingerprint, in.Title, in.Culprit, in.Level, ts, ts, nullOrNil(in.Release), nullOrNil(in.Release))
-		if err != nil {
-			return nil, err
+	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var issue IssueRow
+		q := tx.Where("project_id = ? AND fingerprint = ?", in.ProjectID, in.Fingerprint).Limit(1).Find(&issue)
+		if q.Error != nil {
+			return q.Error
 		}
-		issueID, _ = res.LastInsertId()
-		result.IsNew = true
-		result.IssueID = issueID
-	} else if err != nil {
-		return nil, err
-	} else {
-		result.IssueID = issueID
-		newStatus := status
-		regressedSQL := "regressed"
-		if status == "resolved" && shouldRegress(in.Release, lastRelease, resolvedAt, in.Timestamp) {
-			newStatus = "open"
-			regressedSQL = "1"
-			result.Regressed = true
-		}
-		firstRel := firstRelease
-		lastRel := lastRelease
-		if in.Release != "" {
-			if !firstRel.Valid {
-				firstRel = sql.NullString{String: in.Release, Valid: true}
+		if q.RowsAffected == 0 {
+			issue = IssueRow{
+				ProjectID:    in.ProjectID,
+				Fingerprint:  in.Fingerprint,
+				Title:        in.Title,
+				Culprit:      in.Culprit,
+				Status:       "open",
+				Level:        in.Level,
+				Count:        1,
+				FirstSeen:    ts,
+				LastSeen:     ts,
+				FirstRelease: strPtrOrNil(in.Release),
+				LastRelease:  strPtrOrNil(in.Release),
+				Regressed:    0,
 			}
-			lastRel = sql.NullString{String: in.Release, Valid: true}
-		}
-		if result.Regressed {
-			_, err = tx.ExecContext(ctx, `
-				UPDATE issues SET count = count + 1, last_seen = ?, status = ?, regressed = 1,
-				       title = ?, culprit = ?, first_release = ?, last_release = ?, resolved_at = NULL
-				WHERE id = ?`,
-				ts, newStatus, in.Title, in.Culprit, nullStrVal(firstRel), nullStrVal(lastRel), issueID)
+			if err := tx.Create(&issue).Error; err != nil {
+				return err
+			}
+			result.IsNew = true
+			result.IssueID = issue.ID
 		} else {
-			_, err = tx.ExecContext(ctx, `
-				UPDATE issues SET count = count + 1, last_seen = ?, status = ?, regressed = `+regressedSQL+`,
-				       title = ?, culprit = ?, first_release = ?, last_release = ?
-				WHERE id = ?`,
-				ts, newStatus, in.Title, in.Culprit, nullStrVal(firstRel), nullStrVal(lastRel), issueID)
+			result.IssueID = issue.ID
+			newStatus := issue.Status
+			regressed := issue.Regressed
+			if issue.Status == "resolved" && shouldRegress(in.Release, issue.LastRelease, issue.ResolvedAt, in.Timestamp) {
+				newStatus = "open"
+				regressed = 1
+				result.Regressed = true
+			}
+			firstRel := issue.FirstRelease
+			lastRel := issue.LastRelease
+			if in.Release != "" {
+				if firstRel == nil {
+					firstRel = strPtrOrNil(in.Release)
+				}
+				lastRel = strPtrOrNil(in.Release)
+			}
+			updates := map[string]any{
+				"count":         gorm.Expr("count + 1"),
+				"last_seen":     ts,
+				"status":        newStatus,
+				"regressed":     regressed,
+				"title":         in.Title,
+				"culprit":       in.Culprit,
+				"first_release": firstRel,
+				"last_release":  lastRel,
+			}
+			if result.Regressed {
+				updates["resolved_at"] = nil
+				updates["regressed"] = 1
+			}
+			if err := tx.Model(&IssueRow{}).Where("id = ?", issue.ID).Updates(updates).Error; err != nil {
+				return err
+			}
 		}
-		if err != nil {
-			return nil, err
-		}
-	}
 
-	_, err = tx.ExecContext(ctx, `
-		INSERT OR IGNORE INTO events (
-			event_id, issue_id, project_id, timestamp, environment, release, platform,
-			message, exception_type, culprit, user_id, user_email, raw_path, payload_json
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, in.EventID, issueID, in.ProjectID, ts, nullOrNil(in.Environment), nullOrNil(in.Release), nullOrNil(in.Platform),
-		nullOrNil(in.Message), nullOrNil(in.ExceptionType), nullOrNil(in.Culprit),
-		nullOrNil(in.UserID), nullOrNil(in.UserEmail), in.RawPath, in.PayloadJSON)
+		ev := EventRow{
+			EventID:       in.EventID,
+			IssueID:       result.IssueID,
+			ProjectID:     in.ProjectID,
+			Timestamp:     ts,
+			Environment:   strPtrOrNil(in.Environment),
+			Release:       strPtrOrNil(in.Release),
+			Platform:      strPtrOrNil(in.Platform),
+			Message:       strPtrOrNil(in.Message),
+			ExceptionType: strPtrOrNil(in.ExceptionType),
+			Culprit:       strPtrOrNil(in.Culprit),
+			UserID:        strPtrOrNil(in.UserID),
+			UserEmail:     strPtrOrNil(in.UserEmail),
+			TraceID:       strPtrOrNil(in.TraceID),
+			RawPath:       in.RawPath,
+			PayloadJSON:   in.PayloadJSON,
+		}
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&ev).Error; err != nil {
+			return err
+		}
+
+		seen := map[string]bool{}
+		addTag := func(k, v string) error {
+			if k == "" || v == "" || seen[k] {
+				return nil
+			}
+			seen[k] = true
+			return tx.Create(&EventTagRow{
+				EventID:   in.EventID,
+				IssueID:   result.IssueID,
+				ProjectID: in.ProjectID,
+				Key:       k,
+				Value:     v,
+			}).Error
+		}
+		for k, v := range in.Tags {
+			if err := addTag(k, v); err != nil {
+				return err
+			}
+		}
+		if err := addTag("environment", in.Environment); err != nil {
+			return err
+		}
+		return addTag("release", in.Release)
+	})
 	if err != nil {
-		return nil, err
-	}
-
-	seen := map[string]bool{}
-	addTag := func(k, v string) error {
-		if k == "" || v == "" || seen[k] {
-			return nil
-		}
-		seen[k] = true
-		_, err := tx.ExecContext(ctx,
-			`INSERT INTO event_tags (event_id, issue_id, project_id, key, value) VALUES (?, ?, ?, ?, ?)`,
-			in.EventID, issueID, in.ProjectID, k, v,
-		)
-		return err
-	}
-	for k, v := range in.Tags {
-		if err := addTag(k, v); err != nil {
-			return nil, err
-		}
-	}
-	if err := addTag("environment", in.Environment); err != nil {
-		return nil, err
-	}
-	if err := addTag("release", in.Release); err != nil {
-		return nil, err
-	}
-
-	if err := tx.Commit(); err != nil {
 		return nil, err
 	}
 	return result, nil
+}
+
+func strPtrOrNil(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func nullOrNil(s string) any {
@@ -607,28 +564,20 @@ func nullOrNil(s string) any {
 	return s
 }
 
-func nullStrVal(ns sql.NullString) any {
-	if ns.Valid {
-		return ns.String
-	}
-	return nil
-}
-
 // shouldRegress: newer/different release than last_release, OR quiet window elapsed since resolve.
-func shouldRegress(eventRelease string, lastRelease, resolvedAt sql.NullString, eventTS time.Time) bool {
-	if eventRelease != "" && lastRelease.Valid && eventRelease != lastRelease.String {
+func shouldRegress(eventRelease string, lastRelease, resolvedAt *string, eventTS time.Time) bool {
+	if eventRelease != "" && lastRelease != nil && eventRelease != *lastRelease {
 		return true
 	}
-	if !resolvedAt.Valid || resolvedAt.String == "" {
+	if resolvedAt == nil || *resolvedAt == "" {
 		return true // no resolved_at → treat as regression (legacy rows)
 	}
-	rt, err := time.Parse(time.RFC3339Nano, resolvedAt.String)
+	rt, err := time.Parse(time.RFC3339Nano, *resolvedAt)
 	if err != nil {
-		rt, err = time.Parse(time.RFC3339, resolvedAt.String)
+		rt, err = time.Parse(time.RFC3339, *resolvedAt)
 		if err != nil {
 			return true
 		}
 	}
 	return eventTS.Sub(rt) >= QuietWindow
 }
-

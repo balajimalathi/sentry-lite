@@ -1,7 +1,15 @@
+import {
+  authHeaders,
+  clearAdminToken,
+  isSessionExpired,
+  touchSession,
+} from '@/lib/auth'
+
 export type Project = {
   id: number
   slug: string
   name: string
+  allowed_origins: string[]
   issue_count: number
   latest_activity_at: string | null
   created_at: string
@@ -36,6 +44,8 @@ export type Issue = {
   regressed: boolean
   assignee?: string | null
   environments?: string[]
+  /** Distinct key:value pairs from event_tags (excludes environment / release). */
+  tags?: string[]
 }
 
 export type Frame = {
@@ -62,9 +72,64 @@ export type Event = {
   culprit: string | null
   user_id: string | null
   user_email: string | null
+  trace_id?: string | null
   raw_path: string
   payload_json?: string
   tags?: Record<string, string>
+}
+
+export type TransactionSummary = {
+  name: string
+  count: number
+  p95_ms: number
+  p99_ms: number
+  project_id: number
+}
+
+export type Span = {
+  span_id: string
+  parent_span_id: string
+  op: string
+  description: string
+  duration_ms: number
+  status: string
+}
+
+export type TransactionSample = {
+  id: number
+  event_id: string
+  project_id: number
+  name: string
+  op: string
+  trace_id: string
+  span_id: string
+  duration_ms: number
+  status: string
+  environment: string | null
+  release: string | null
+  timestamp: string
+  spans?: Span[]
+}
+
+export type TraceDetail = {
+  trace_id: string
+  transactions: TransactionSample[]
+  issues: Array<{ issue_id: number; title: string; event_id: string }>
+}
+
+export type CronMonitor = {
+  id: number
+  project_id: number
+  slug: string
+  name: string
+  schedule_sec: number
+  grace_sec: number
+  environment: string | null
+  status: string
+  last_checkin_at: string | null
+  next_expected_at: string | null
+  token: string
+  created_at: string
 }
 
 export type Release = {
@@ -92,14 +157,60 @@ export type AlertRule = {
   created_at: string
 }
 
+export type StatsBucket = {
+  t: string
+  events: number
+}
+
+export type DashboardStats = {
+  unresolved: number
+  events: number
+  regressions: number
+  crons_unhealthy: number
+  by_status: Record<string, number>
+  series: StatsBucket[]
+  top_issues: Issue[]
+}
+
+function handleUnauthorized(res: Response) {
+  if (res.status !== 401) return
+  clearAdminToken()
+  if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+    window.location.assign('/login')
+  }
+}
+
+async function apiFetch(path: string, init?: RequestInit): Promise<Response> {
+  if (isSessionExpired()) {
+    clearAdminToken()
+    if (
+      typeof window !== 'undefined' &&
+      !window.location.pathname.startsWith('/login')
+    ) {
+      window.location.assign('/login')
+    }
+    return new Response(null, { status: 401, statusText: 'Session expired' })
+  }
+
+  const headers = new Headers(init?.headers)
+  const auth = authHeaders() as Record<string, string>
+  if (auth.Authorization) {
+    headers.set('Authorization', auth.Authorization)
+    touchSession()
+  }
+  const res = await fetch(path, { ...init, headers })
+  handleUnauthorized(res)
+  return res
+}
+
 async function get<T>(path: string): Promise<T> {
-  const res = await fetch(path)
+  const res = await apiFetch(path)
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`)
   return res.json()
 }
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -113,8 +224,11 @@ async function post<T>(path: string, body: unknown): Promise<T> {
 
 export const api = {
   projects: () => get<Project[]>('/api/internal/projects'),
-  createProject: (body: { name: string; slug?: string }) =>
-    post<CreatedProject>('/api/internal/projects', body),
+  createProject: (body: {
+    name: string
+    slug?: string
+    allowed_origins?: string[]
+  }) => post<CreatedProject>('/api/internal/projects', body),
   facets: (projectId?: string) =>
     get<Facets>(
       projectId
@@ -132,7 +246,7 @@ export const api = {
     get<{ issue: Issue; latest_event: Event | null }>(`/api/internal/issues/${id}`),
   events: (id: string) => get<Event[]>(`/api/internal/issues/${id}/events`),
   updateStatus: async (id: number, status: string) => {
-    const res = await fetch(`/api/internal/issues/${id}`, {
+    const res = await apiFetch(`/api/internal/issues/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status }),
@@ -141,7 +255,7 @@ export const api = {
     return res.json() as Promise<Issue>
   },
   updateAssignee: async (id: number, assignee: string) => {
-    const res = await fetch(`/api/internal/issues/${id}`, {
+    const res = await apiFetch(`/api/internal/issues/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ assignee }),
@@ -171,6 +285,55 @@ export const api = {
     target: string
     secret?: string
   }) => post<AlertRule>('/api/internal/alerts', body),
+  deleteAlert: async (id: number) => {
+    const res = await apiFetch(`/api/internal/alerts/${id}`, { method: 'DELETE' })
+    if (!res.ok) throw new Error(`${res.status}`)
+  },
+  transactions: (projectId: string) =>
+    get<TransactionSummary[]>(
+      `/api/internal/transactions?project_id=${projectId}`
+    ),
+  transaction: (name: string, projectId: string) =>
+    get<{
+      name: string
+      summary: TransactionSummary | null
+      samples: TransactionSample[]
+    }>(
+      `/api/internal/transaction?project_id=${projectId}&name=${encodeURIComponent(name)}`
+    ),
+  trace: (traceId: string) =>
+    get<TraceDetail>(`/api/internal/traces/${encodeURIComponent(traceId)}`),
+  crons: (projectId?: string) =>
+    get<CronMonitor[]>(
+      projectId
+        ? `/api/internal/crons?project_id=${projectId}`
+        : '/api/internal/crons'
+    ),
+  createCron: (body: {
+    project_id: number
+    name: string
+    slug?: string
+    schedule_sec: number
+    grace_sec?: number
+    environment?: string
+  }) => post<CronMonitor>('/api/internal/crons', body),
+  deleteCron: async (id: number) => {
+    const res = await apiFetch(`/api/internal/crons/${id}`, { method: 'DELETE' })
+    if (!res.ok) throw new Error(`${res.status}`)
+  },
+  stats: (params: {
+    project_id?: string
+    from: string
+    to: string
+    interval?: string
+  }) => {
+    const q = new URLSearchParams()
+    if (params.project_id) q.set('project_id', params.project_id)
+    q.set('from', params.from)
+    q.set('to', params.to)
+    if (params.interval) q.set('interval', params.interval)
+    return get<DashboardStats>(`/api/internal/stats?${q}`)
+  },
 }
 
 export function formatTime(iso: string | null | undefined) {
@@ -178,6 +341,31 @@ export function formatTime(iso: string | null | undefined) {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return iso
   return d.toLocaleString()
+}
+
+/** Compact relative age from an API ISO timestamp (Sentry-style: `5m`, `1h`, `35d`; future: `in 5m`). */
+export function formatRelativeTime(iso: string | null | undefined) {
+  if (!iso) return '—'
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  const diffSec = Math.floor((Date.now() - d.getTime()) / 1000)
+  const future = diffSec < 0
+  const sec = Math.abs(diffSec)
+  let label: string
+  if (sec < 60) label = `${sec}s`
+  else {
+    const min = Math.floor(sec / 60)
+    if (min < 60) label = `${min}m`
+    else {
+      const hr = Math.floor(min / 60)
+      if (hr < 24) label = `${hr}h`
+      else {
+        const day = Math.floor(hr / 24)
+        label = day < 365 ? `${day}d` : `${Math.floor(day / 365)}y`
+      }
+    }
+  }
+  return future ? `in ${label}` : label
 }
 
 export function parsePayload(ev: Event | null) {
@@ -196,6 +384,7 @@ export function parsePayload(ev: Event | null) {
       }>
       exception_type?: string
       message?: string
+      trace_id?: string
     }
   } catch {
     return null

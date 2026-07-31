@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
-	"database/sql"
+	"errors"
 	"time"
+
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type Release struct {
@@ -37,13 +40,20 @@ func (s *Store) UpsertRelease(ctx context.Context, projectID int64, version, ref
 		return nil, nil
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.DB.ExecContext(ctx, `
-		INSERT INTO releases (project_id, version, ref, url, date_released)
-		VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT(project_id, version) DO UPDATE SET
-			ref = COALESCE(excluded.ref, releases.ref),
-			url = COALESCE(excluded.url, releases.url)
-	`, projectID, version, nullOrNil(ref), nullOrNil(url), now)
+	row := ReleaseRow{
+		ProjectID:    projectID,
+		Version:      version,
+		Ref:          strPtrOrNil(ref),
+		URL:          strPtrOrNil(url),
+		DateReleased: &now,
+	}
+	err := s.DB.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "project_id"}, {Name: "version"}},
+		DoUpdates: clause.Assignments(map[string]any{
+			"ref": gorm.Expr("COALESCE(excluded.ref, releases.ref)"),
+			"url": gorm.Expr("COALESCE(excluded.url, releases.url)"),
+		}),
+	}).Create(&row).Error
 	if err != nil {
 		return nil, err
 	}
@@ -51,67 +61,70 @@ func (s *Store) UpsertRelease(ctx context.Context, projectID int64, version, ref
 }
 
 func (s *Store) GetRelease(ctx context.Context, projectID int64, version string) (*Release, error) {
-	row := s.DB.QueryRowContext(ctx, `
-		SELECT id, project_id, version, ref, url, date_released, created_at FROM releases
-		WHERE project_id = ? AND version = ?
-	`, projectID, version)
-	return scanRelease(row)
-}
-
-func (s *Store) ListReleases(ctx context.Context, projectID int64) ([]Release, error) {
-	rows, err := s.DB.QueryContext(ctx, `
-		SELECT r.id, r.project_id, r.version, r.ref, r.url, r.date_released, r.created_at,
-		       COALESCE((SELECT COUNT(DISTINCT e.issue_id) FROM events e WHERE e.project_id = r.project_id AND e.release = r.version), 0),
-		       COALESCE((SELECT COUNT(*) FROM events e WHERE e.project_id = r.project_id AND e.release = r.version), 0)
-		FROM releases r
-		WHERE r.project_id = ?
-		ORDER BY r.created_at DESC
-	`, projectID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Release
-	for rows.Next() {
-		var rel Release
-		var ref, url, dateRel sql.NullString
-		if err := rows.Scan(&rel.ID, &rel.ProjectID, &rel.Version, &ref, &url, &dateRel, &rel.CreatedAt, &rel.IssueCount, &rel.EventCount); err != nil {
-			return nil, err
-		}
-		if ref.Valid {
-			rel.Ref = &ref.String
-		}
-		if url.Valid {
-			rel.URL = &url.String
-		}
-		if dateRel.Valid {
-			rel.DateReleased = &dateRel.String
-		}
-		out = append(out, rel)
-	}
-	return out, rows.Err()
-}
-
-func scanRelease(row scannable) (*Release, error) {
-	var rel Release
-	var ref, url, dateRel sql.NullString
-	err := row.Scan(&rel.ID, &rel.ProjectID, &rel.Version, &ref, &url, &dateRel, &rel.CreatedAt)
-	if err == sql.ErrNoRows {
+	var row ReleaseRow
+	err := s.DB.WithContext(ctx).
+		Where("project_id = ? AND version = ?", projectID, version).
+		First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	if ref.Valid {
-		rel.Ref = &ref.String
+	return releaseFromRow(&row), nil
+}
+
+func (s *Store) ListReleases(ctx context.Context, projectID int64) ([]Release, error) {
+	type releaseScan struct {
+		ID           int64
+		ProjectID    int64
+		Version      string
+		Ref          *string
+		URL          *string
+		DateReleased *string
+		CreatedAt    string
+		IssueCount   int64
+		EventCount   int64
 	}
-	if url.Valid {
-		rel.URL = &url.String
+	var rows []releaseScan
+	err := s.DB.WithContext(ctx).Raw(`
+		SELECT r.id, r.project_id, r.version, r.ref, r.url, r.date_released, r.created_at,
+		       COALESCE((SELECT COUNT(DISTINCT e.issue_id) FROM events e WHERE e.project_id = r.project_id AND e.release = r.version), 0) AS issue_count,
+		       COALESCE((SELECT COUNT(*) FROM events e WHERE e.project_id = r.project_id AND e.release = r.version), 0) AS event_count
+		FROM releases r
+		WHERE r.project_id = ?
+		ORDER BY r.created_at DESC
+	`, projectID).Scan(&rows).Error
+	if err != nil {
+		return nil, err
 	}
-	if dateRel.Valid {
-		rel.DateReleased = &dateRel.String
+	out := make([]Release, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, Release{
+			ID:           r.ID,
+			ProjectID:    r.ProjectID,
+			Version:      r.Version,
+			Ref:          r.Ref,
+			URL:          r.URL,
+			DateReleased: r.DateReleased,
+			CreatedAt:    r.CreatedAt,
+			IssueCount:   r.IssueCount,
+			EventCount:   r.EventCount,
+		})
 	}
-	return &rel, nil
+	return out, nil
+}
+
+func releaseFromRow(row *ReleaseRow) *Release {
+	return &Release{
+		ID:           row.ID,
+		ProjectID:    row.ProjectID,
+		Version:      row.Version,
+		Ref:          row.Ref,
+		URL:          row.URL,
+		DateReleased: row.DateReleased,
+		CreatedAt:    row.CreatedAt,
+	}
 }
 
 func (s *Store) CreateAlertRule(ctx context.Context, rule AlertRule) (*AlertRule, error) {
@@ -122,108 +135,110 @@ func (s *Store) CreateAlertRule(ctx context.Context, rule AlertRule) (*AlertRule
 	if rule.WindowSec <= 0 {
 		rule.WindowSec = 300
 	}
-	res, err := s.DB.ExecContext(ctx, `
-		INSERT INTO alert_rules (project_id, name, trigger, channel, target, threshold, window_sec, enabled, secret)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, rule.ProjectID, rule.Name, rule.Trigger, rule.Channel, rule.Target, rule.Threshold, rule.WindowSec, en, nullOrNil(rule.Secret))
-	if err != nil {
+	row := AlertRuleRow{
+		ProjectID: rule.ProjectID,
+		Name:      rule.Name,
+		Trigger:   rule.Trigger,
+		Channel:   rule.Channel,
+		Target:    rule.Target,
+		Threshold: rule.Threshold,
+		WindowSec: rule.WindowSec,
+		Enabled:   en,
+		Secret:    strPtrOrNil(rule.Secret),
+	}
+	if err := s.DB.WithContext(ctx).Create(&row).Error; err != nil {
 		return nil, err
 	}
-	id, _ := res.LastInsertId()
-	return s.GetAlertRule(ctx, id)
+	return s.GetAlertRule(ctx, row.ID)
 }
 
 func (s *Store) GetAlertRule(ctx context.Context, id int64) (*AlertRule, error) {
-	row := s.DB.QueryRowContext(ctx, `
-		SELECT id, project_id, name, trigger, channel, target, threshold, window_sec, enabled, secret, created_at
-		FROM alert_rules WHERE id = ?
-	`, id)
-	return scanAlertRule(row)
-}
-
-func (s *Store) ListAlertRules(ctx context.Context, projectID int64) ([]AlertRule, error) {
-	q := `SELECT id, project_id, name, trigger, channel, target, threshold, window_sec, enabled, secret, created_at FROM alert_rules`
-	args := []any{}
-	if projectID > 0 {
-		q += ` WHERE project_id = ?`
-		args = append(args, projectID)
-	}
-	q += ` ORDER BY id ASC`
-	rows, err := s.DB.QueryContext(ctx, q, args...)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []AlertRule
-	for rows.Next() {
-		rule, err := scanAlertRule(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *rule)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) ListEnabledAlertRules(ctx context.Context, projectID int64, trigger string) ([]AlertRule, error) {
-	rows, err := s.DB.QueryContext(ctx, `
-		SELECT id, project_id, name, trigger, channel, target, threshold, window_sec, enabled, secret, created_at
-		FROM alert_rules WHERE project_id = ? AND trigger = ? AND enabled = 1
-	`, projectID, trigger)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []AlertRule
-	for rows.Next() {
-		rule, err := scanAlertRule(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, *rule)
-	}
-	return out, rows.Err()
-}
-
-func (s *Store) CountEventsSince(ctx context.Context, projectID int64, since time.Time) (int64, error) {
-	var n int64
-	err := s.DB.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM events WHERE project_id = ? AND timestamp >= ?`,
-		projectID, since.UTC().Format(time.RFC3339Nano),
-	).Scan(&n)
-	return n, err
-}
-
-func (s *Store) RecordAlertDelivery(ctx context.Context, ruleID, issueID int64, status, detail string) error {
-	_, err := s.DB.ExecContext(ctx,
-		`INSERT INTO alert_deliveries (rule_id, issue_id, status, detail) VALUES (?, ?, ?, ?)`,
-		ruleID, nullOrNilInt(issueID), status, detail,
-	)
-	return err
-}
-
-func scanAlertRule(row scannable) (*AlertRule, error) {
-	var rule AlertRule
-	var en int
-	var secret sql.NullString
-	err := row.Scan(&rule.ID, &rule.ProjectID, &rule.Name, &rule.Trigger, &rule.Channel, &rule.Target,
-		&rule.Threshold, &rule.WindowSec, &en, &secret, &rule.CreatedAt)
-	if err == sql.ErrNoRows {
+	var row AlertRuleRow
+	err := s.DB.WithContext(ctx).First(&row, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	rule.Enabled = en == 1
-	if secret.Valid {
-		rule.Secret = secret.String
-	}
-	return &rule, nil
+	return alertRuleFromRow(&row), nil
 }
 
-func nullOrNilInt(n int64) any {
-	if n == 0 {
-		return nil
+func (s *Store) ListAlertRules(ctx context.Context, projectID int64) ([]AlertRule, error) {
+	q := s.DB.WithContext(ctx).Model(&AlertRuleRow{})
+	if projectID > 0 {
+		q = q.Where("project_id = ?", projectID)
 	}
-	return n
+	var rows []AlertRuleRow
+	if err := q.Order("id ASC").Find(&rows).Error; err != nil {
+		return nil, err
+	}
+	out := make([]AlertRule, 0, len(rows))
+	for i := range rows {
+		out = append(out, *alertRuleFromRow(&rows[i]))
+	}
+	return out, nil
+}
+
+func (s *Store) ListEnabledAlertRules(ctx context.Context, projectID int64, trigger string) ([]AlertRule, error) {
+	var rows []AlertRuleRow
+	err := s.DB.WithContext(ctx).
+		Where("project_id = ? AND trigger = ? AND enabled = 1", projectID, trigger).
+		Find(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	out := make([]AlertRule, 0, len(rows))
+	for i := range rows {
+		out = append(out, *alertRuleFromRow(&rows[i]))
+	}
+	return out, nil
+}
+
+func (s *Store) CountEventsSince(ctx context.Context, projectID int64, since time.Time) (int64, error) {
+	var n int64
+	err := s.DB.WithContext(ctx).Model(&EventRow{}).
+		Where("project_id = ? AND timestamp >= ?", projectID, since.UTC().Format(time.RFC3339Nano)).
+		Count(&n).Error
+	return n, err
+}
+
+func (s *Store) RecordAlertDelivery(ctx context.Context, ruleID, issueID int64, status, detail string) error {
+	row := AlertDeliveryRow{
+		RuleID: ruleID,
+		Status: status,
+		Detail: strPtrOrNil(detail),
+	}
+	if issueID != 0 {
+		row.IssueID = &issueID
+	}
+	return s.DB.WithContext(ctx).Create(&row).Error
+}
+
+func (s *Store) DeleteAlertRule(ctx context.Context, id int64) error {
+	return s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("rule_id = ?", id).Delete(&AlertDeliveryRow{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&AlertRuleRow{}, id).Error
+	})
+}
+
+func alertRuleFromRow(row *AlertRuleRow) *AlertRule {
+	rule := &AlertRule{
+		ID:        row.ID,
+		ProjectID: row.ProjectID,
+		Name:      row.Name,
+		Trigger:   row.Trigger,
+		Channel:   row.Channel,
+		Target:    row.Target,
+		Threshold: row.Threshold,
+		WindowSec: row.WindowSec,
+		Enabled:   row.Enabled == 1,
+		CreatedAt: row.CreatedAt,
+	}
+	if row.Secret != nil {
+		rule.Secret = *row.Secret
+	}
+	return rule
 }

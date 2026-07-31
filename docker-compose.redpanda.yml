@@ -10,13 +10,11 @@ services:
       - --reserve-memory=0M
       - --node-id=0
       - --check=false
+      # Dual listeners: Docker network (app) + loopback (host go run / TUI / load)
       - --kafka-addr=internal://0.0.0.0:9092,external://0.0.0.0:19092
-      - --advertise-kafka-addr=internal://redpanda:9092,external://localhost:19092
-      - --pandaproxy-addr=internal://0.0.0.0:8082,external://0.0.0.0:18082
-      - --advertise-pandaproxy-addr=internal://redpanda:8082,external://localhost:18082
+      - --advertise-kafka-addr=internal://redpanda:9092,external://127.0.0.1:19092
     ports:
-      - "19092:19092"
-      - "18082:18082"
+      - "127.0.0.1:19092:19092"
     volumes:
       - redpanda_data:/var/lib/redpanda/data
     networks:
