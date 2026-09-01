@@ -39,6 +39,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useDataTable } from '@/hooks/use-data-table'
+import { EMPTY_PROJECTS } from '@/hooks/use-project-filter'
 import { firstFilterValue } from '@/lib/row-filters'
 
 const BASIC_FILTER_KEYS = ['project_id', 'version'] as const
@@ -70,7 +71,7 @@ export default function ReleasesPage() {
     queryFn: () => api.projects(),
   })
 
-  const projects = projectsQuery.data ?? []
+  const projects = projectsQuery.data ?? EMPTY_PROJECTS
   const projectOptions = useMemo(
     () => projects.map((p) => ({ label: p.name, value: String(p.id) })),
     [projects]

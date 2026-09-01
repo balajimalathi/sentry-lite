@@ -47,6 +47,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useDataTable } from '@/hooks/use-data-table'
+import { EMPTY_PROJECTS } from '@/hooks/use-project-filter'
 import { firstFilterValue } from '@/lib/row-filters'
 
 const BASIC_FILTER_KEYS = [
@@ -55,6 +56,8 @@ const BASIC_FILTER_KEYS = [
   'status',
   'environment',
 ] as const
+
+const EMPTY_MONITORS: CronMonitor[] = []
 
 function statusVariant(status: string) {
   switch (status) {
@@ -101,7 +104,7 @@ export default function CronsPage() {
     queryFn: () => api.projects(),
   })
 
-  const projects = projectsQuery.data ?? []
+  const projects = projectsQuery.data ?? EMPTY_PROJECTS
   const projectOptions = useMemo(
     () => projects.map((p) => ({ label: p.name, value: String(p.id) })),
     [projects]
@@ -147,7 +150,7 @@ export default function CronsPage() {
     },
   })
 
-  const rawMonitors = cronsQuery.data ?? []
+  const rawMonitors = cronsQuery.data ?? EMPTY_MONITORS
 
   const envOptions = useMemo(() => {
     const values = new Set<string>()

@@ -1,7 +1,11 @@
 import { parseAsArrayOf, parseAsString, useQueryState } from 'nuqs'
+import type { Project } from '@/api'
 import { firstFilterValue } from '@/lib/row-filters'
 
 export const ALL_PROJECTS = 'all'
+
+/** Stable fallback so `projectsQuery.data ?? []` is not a new array every render. */
+export const EMPTY_PROJECTS: Project[] = []
 
 export function useProjectFilter() {
   const [projectIds, setProjectIds] = useQueryState(

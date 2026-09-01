@@ -42,7 +42,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { toTitleCase } from '@/lib/format'
-import { useProjectFilter } from '@/hooks/use-project-filter'
+import { EMPTY_PROJECTS, useProjectFilter } from '@/hooks/use-project-filter'
 
 const RANGES = ['1h', '24h', '7d', '14d'] as const
 type RangeKey = (typeof RANGES)[number]
@@ -149,7 +149,7 @@ export default function DashboardPage() {
     queryKey: ['projects'],
     queryFn: () => api.projects(),
   })
-  const projects = projectsQuery.data ?? []
+  const projects = projectsQuery.data ?? EMPTY_PROJECTS
 
   const statsQuery = useQuery({
     queryKey: ['stats', projectId || 'all', window.from, window.to, window.interval],

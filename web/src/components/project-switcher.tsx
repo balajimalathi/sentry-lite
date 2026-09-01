@@ -10,6 +10,7 @@ import {
 } from '@/components/ui/select'
 import {
   ALL_PROJECTS,
+  EMPTY_PROJECTS,
   useProjectFilter,
 } from '@/hooks/use-project-filter'
 
@@ -19,7 +20,7 @@ export function ProjectSwitcher({ className }: { className?: string }) {
     queryKey: ['projects'],
     queryFn: () => api.projects(),
   })
-  const projects = projectsQuery.data ?? []
+  const projects = projectsQuery.data ?? EMPTY_PROJECTS
   const items = [
     { label: 'All projects', value: ALL_PROJECTS },
     ...projects.map((p) => ({ label: p.name, value: String(p.id) })),

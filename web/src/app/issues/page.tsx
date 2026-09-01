@@ -30,6 +30,7 @@ import {
   applyAdvancedIssueFilters,
   columnFiltersToIssueParams,
 } from '@/lib/issue-filters'
+import { EMPTY_PROJECTS } from '@/hooks/use-project-filter'
 import { toTitleCase } from '@/lib/format'
 import { statusVariant } from '@/lib/status'
 
@@ -42,6 +43,8 @@ const BASIC_FILTER_KEYS = [
   'tag',
   'last_seen',
 ] as const
+
+const EMPTY_ISSUES: Issue[] = []
 
 export default function IssuesPage() {
   const {
@@ -114,7 +117,7 @@ export default function IssuesPage() {
     queryFn: () => api.issues(apiParams),
   })
 
-  const projects = projectsQuery.data ?? []
+  const projects = projectsQuery.data ?? EMPTY_PROJECTS
   const facets = facetsQuery.data
 
   const projectOptions = useMemo(
@@ -394,7 +397,7 @@ export default function IssuesPage() {
     ]
   )
 
-  const rawIssues = issuesQuery.data ?? []
+  const rawIssues = issuesQuery.data ?? EMPTY_ISSUES
   const issues = useMemo(() => {
     if (filterMode === 'basic') return rawIssues
     return applyAdvancedIssueFilters(rawIssues, advancedFilters, joinOperator)
