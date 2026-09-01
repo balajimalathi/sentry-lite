@@ -1,13 +1,9 @@
-import { useEffect, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { AlertCircleIcon } from 'lucide-react'
-import {
-  api,
-  formatRelativeTime,
-  formatTime,
-  type TransactionSample,
-  type TransactionSummary,
-} from '@/api'
+import { api, formatRelativeTime, formatTime } from '@/api'
+import { SelectProjectEmpty } from '@/components/page-empty'
+import { TraceWaterfall } from '@/components/trace-waterfall'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   Breadcrumb,
@@ -17,14 +13,8 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import { Skeleton } from '@/components/ui/skeleton'
+import { useProjectFilter } from '@/hooks/use-project-filter'
 
 function fmtMs(n: number) {
   if (!Number.isFinite(n)) return '—'
@@ -36,39 +26,54 @@ function fmtMs(n: number) {
 export default function TransactionDetailPage() {
   const { name: rawName = '' } = useParams()
   const name = decodeURIComponent(rawName)
-  const [params] = useSearchParams()
-  const projectId = params.get('project_id') || '1'
-  const [summary, setSummary] = useState<TransactionSummary | null>(null)
-  const [samples, setSamples] = useState<TransactionSample[]>([])
-  const [error, setError] = useState('')
+  const { projectId } = useProjectFilter()
 
-  useEffect(() => {
-    if (!name) return
-    api
-      .transaction(name, projectId)
-      .then((d) => {
-        setSummary(d.summary)
-        setSamples(d.samples)
-      })
-      .catch((e) => setError(String(e)))
-  }, [name, projectId])
+  const query = useQuery({
+    queryKey: ['transaction', name, projectId],
+    queryFn: () => api.transaction(name, projectId),
+    enabled: Boolean(name && projectId),
+  })
 
-  if (error) {
+  if (!projectId) {
+    return (
+      <section className="flex flex-col gap-4">
+        <h1 className="font-heading font-mono text-2xl font-medium tracking-tight">
+          {name || 'Transaction'}
+        </h1>
+        <SelectProjectEmpty />
+      </section>
+    )
+  }
+
+  if (query.error) {
     return (
       <Alert variant="destructive">
         <AlertCircleIcon />
         <AlertTitle>Failed to load transaction</AlertTitle>
-        <AlertDescription>{error}</AlertDescription>
+        <AlertDescription>{String(query.error)}</AlertDescription>
       </Alert>
     )
   }
+
+  if (query.isLoading) {
+    return (
+      <div className="flex flex-col gap-4">
+        <Skeleton className="h-4 w-40" />
+        <Skeleton className="h-8 w-2/3" />
+        <Skeleton className="h-48 w-full" />
+      </div>
+    )
+  }
+
+  const summary = query.data?.summary ?? null
+  const samples = query.data?.samples ?? []
 
   return (
     <section className="flex flex-col gap-6">
       <Breadcrumb>
         <BreadcrumbList>
           <BreadcrumbItem>
-            <BreadcrumbLink render={<Link to="/performance" />}>
+            <BreadcrumbLink render={<Link to={`/performance?project_id=${projectId}`} />}>
               Performance
             </BreadcrumbLink>
           </BreadcrumbItem>
@@ -80,7 +85,7 @@ export default function TransactionDetailPage() {
       </Breadcrumb>
 
       <div>
-        <h1 className="font-heading text-2xl font-medium tracking-tight font-mono">
+        <h1 className="font-heading font-mono text-2xl font-medium tracking-tight">
           {name}
         </h1>
         {summary && (
@@ -119,32 +124,9 @@ export default function TransactionDetailPage() {
                 ) : null}
               </div>
             </div>
-            {(s.spans?.length ?? 0) > 0 && (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Op</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>Duration</TableHead>
-                    <TableHead>Status</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {s.spans!.map((sp, i) => (
-                    <TableRow key={`${sp.span_id}-${i}`}>
-                      <TableCell className="font-mono text-xs">{sp.op || '—'}</TableCell>
-                      <TableCell className="max-w-md truncate text-sm">
-                        {sp.description || '—'}
-                      </TableCell>
-                      <TableCell>{fmtMs(sp.duration_ms)}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {sp.status || '—'}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
+            {(s.spans?.length ?? 0) > 0 ? (
+              <TraceWaterfall transactions={[s]} />
+            ) : null}
           </div>
         ))}
         {samples.length === 0 && (

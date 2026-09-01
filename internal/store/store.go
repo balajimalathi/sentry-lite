@@ -368,6 +368,28 @@ func (s *Store) GetLatestEvent(ctx context.Context, issueID int64) (*Event, erro
 	return &ev, nil
 }
 
+func (s *Store) GetEvent(ctx context.Context, eventID string) (*Event, error) {
+	eventID = strings.TrimSpace(eventID)
+	if eventID == "" {
+		return nil, nil
+	}
+	var row EventRow
+	err := s.DB.WithContext(ctx).Where("event_id = ?", eventID).First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	ev := eventsFromRows([]EventRow{row})[0]
+	tags, err := s.GetEventTags(ctx, ev.EventID)
+	if err != nil {
+		return &ev, nil
+	}
+	ev.Tags = tags
+	return &ev, nil
+}
+
 func (s *Store) GetEventTags(ctx context.Context, eventID string) (map[string]string, error) {
 	var rows []EventTagRow
 	err := s.DB.WithContext(ctx).Where("event_id = ?", eventID).Find(&rows).Error
@@ -431,6 +453,7 @@ type UpsertResult struct {
 	IssueID   int64
 	IsNew     bool
 	Regressed bool
+	Ignored   bool
 }
 
 func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertResult, error) {
@@ -467,7 +490,9 @@ func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertRe
 			result.IssueID = issue.ID
 			newStatus := issue.Status
 			regressed := issue.Regressed
-			if issue.Status == "resolved" && shouldRegress(in.Release, issue.LastRelease, issue.ResolvedAt, in.Timestamp) {
+			if issue.Status == "ignored" {
+				result.Ignored = true
+			} else if issue.Status == "resolved" && shouldRegress(in.Release, issue.LastRelease, issue.ResolvedAt, in.Timestamp) {
 				newStatus = "open"
 				regressed = 1
 				result.Regressed = true

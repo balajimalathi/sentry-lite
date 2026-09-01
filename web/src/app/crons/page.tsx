@@ -6,7 +6,9 @@ import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
 import { api, formatRelativeTime, formatTime, type CronMonitor } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
+import { DataTableSkeleton } from '@/components/data-table/data-table-skeleton'
 import { ListDataTableFilters } from '@/components/list-data-table-filters'
+import { CreateProjectEmpty, PageEmpty } from '@/components/page-empty'
 import {
   PageHeader,
   PageHeaderActionLabel,
@@ -44,8 +46,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
 import { useDataTable } from '@/hooks/use-data-table'
+import { EMPTY_PROJECTS } from '@/hooks/use-project-filter'
 import { firstFilterValue } from '@/lib/row-filters'
 
 const BASIC_FILTER_KEYS = [
@@ -54,6 +56,8 @@ const BASIC_FILTER_KEYS = [
   'status',
   'environment',
 ] as const
+
+const EMPTY_MONITORS: CronMonitor[] = []
 
 function statusVariant(status: string) {
   switch (status) {
@@ -100,7 +104,7 @@ export default function CronsPage() {
     queryFn: () => api.projects(),
   })
 
-  const projects = projectsQuery.data ?? []
+  const projects = projectsQuery.data ?? EMPTY_PROJECTS
   const projectOptions = useMemo(
     () => projects.map((p) => ({ label: p.name, value: String(p.id) })),
     [projects]
@@ -111,16 +115,14 @@ export default function CronsPage() {
     basicColumnFilters.find((f) => f.id === 'project_id')?.value
   )
 
-  const projectId =
-    selectedProjectId || (projects[0] ? String(projects[0].id) : '')
+  const projectId = selectedProjectId
 
   const formProject =
     formProjectId || projectId || (projects[0] ? String(projects[0].id) : '')
 
   const cronsQuery = useQuery({
-    queryKey: ['crons', projectId],
-    queryFn: () => api.crons(projectId),
-    enabled: !!projectId,
+    queryKey: ['crons', projectId || 'all'],
+    queryFn: () => api.crons(projectId || undefined),
   })
 
   const createMutation = useMutation({
@@ -144,11 +146,11 @@ export default function CronsPage() {
     mutationFn: (id: number) => api.deleteCron(id),
     onSuccess: () => {
       setDeleteTarget(null)
-      void qc.invalidateQueries({ queryKey: ['crons', projectId] })
+      void qc.invalidateQueries({ queryKey: ['crons'] })
     },
   })
 
-  const rawMonitors = cronsQuery.data ?? []
+  const rawMonitors = cronsQuery.data ?? EMPTY_MONITORS
 
   const envOptions = useMemo(() => {
     const values = new Set<string>()
@@ -526,7 +528,14 @@ export default function CronsPage() {
       )}
 
       {cronsQuery.isLoading || projectsQuery.isLoading ? (
-        <Skeleton className="h-48 w-full" />
+        <DataTableSkeleton columnCount={7} filterCount={3} rowCount={6} />
+      ) : projects.length === 0 ? (
+        <CreateProjectEmpty />
+      ) : rawMonitors.length === 0 ? (
+        <PageEmpty
+          title="No cron monitors"
+          description="Create a heartbeat monitor, then POST to the check-in URL from your job."
+        />
       ) : (
         <DataTable table={table}>
           <ListDataTableFilters table={table} />

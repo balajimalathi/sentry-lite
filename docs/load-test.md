@@ -91,7 +91,15 @@ Restart the load TUI after rebuilding to pick up the new RAM/storage cards.
 | Variable | Purpose |
 |----------|---------|
 | `SENTRY_DSN` / `NEXT_PUBLIC_SENTRY_DSN` / `LOAD_DSN` | Default DSN |
+| `INGEST_RPS=0` | Disable per-project ingest throttling (required for high-RPS runs) |
+| `EVENT_RETENTION_DAYS=0` | Disable event file purge so a 1M run is not deleted mid-test |
 | _(CORS)_ | Not needed (direct HTTP, not browser) |
+
+For million-event runs, start the API with unlimited ingest and retention:
+
+```bash
+INGEST_RPS=0 EVENT_RETENTION_DAYS=0 go run ./cmd/sentry-lite
+```
 
 ## Flags
 

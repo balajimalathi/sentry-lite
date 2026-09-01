@@ -1,12 +1,14 @@
 import { useMemo, useState, type FormEvent } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
-import { AlertCircleIcon, PlusIcon, Trash2Icon } from 'lucide-react'
+import { AlertCircleIcon, PencilIcon, PlusIcon, Trash2Icon } from 'lucide-react'
 import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
-import { api, type AlertRule } from '@/api'
+import { api, formatRelativeTime, formatTime, type AlertRule } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
+import { DataTableSkeleton } from '@/components/data-table/data-table-skeleton'
 import { ListDataTableFilters } from '@/components/list-data-table-filters'
+import { PageEmpty } from '@/components/page-empty'
 import {
   PageHeader,
   PageHeaderActionLabel,
@@ -33,7 +35,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { Field, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import {
   Select,
@@ -43,8 +45,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Switch } from '@/components/ui/switch'
 import { useDataTable } from '@/hooks/use-data-table'
+import { EMPTY_PROJECTS } from '@/hooks/use-project-filter'
 import { firstFilterValue } from '@/lib/row-filters'
 
 const BASIC_FILTER_KEYS = [
@@ -86,6 +89,7 @@ export default function AlertsPage() {
   })
 
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<AlertRule | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<AlertRule | null>(null)
   const [formProjectId, setFormProjectId] = useState('')
   const [name, setName] = useState('New issue alert')
@@ -95,6 +99,8 @@ export default function AlertsPage() {
   const [botToken, setBotToken] = useState('')
   const [chatId, setChatId] = useState('')
   const [threshold, setThreshold] = useState('10')
+  const [windowSec, setWindowSec] = useState('300')
+  const [secret, setSecret] = useState('')
   const [formError, setFormError] = useState('')
 
   const basicColumnFilters = useMemo<ColumnFiltersState>(() => {
@@ -112,7 +118,7 @@ export default function AlertsPage() {
     queryFn: () => api.projects(),
   })
 
-  const projects = projectsQuery.data ?? []
+  const projects = projectsQuery.data ?? EMPTY_PROJECTS
   const projectOptions = useMemo(
     () => projects.map((p) => ({ label: p.name, value: String(p.id) })),
     [projects]
@@ -123,7 +129,6 @@ export default function AlertsPage() {
     basicColumnFilters.find((f) => f.id === 'project_id')?.value
   )
 
-  // Alerts: empty project filter = all; create dialog uses explicit project.
   const listProjectId = selectedProjectId
   const defaultProjectId =
     selectedProjectId || (projects[0] ? String(projects[0].id) : '')
@@ -137,6 +142,43 @@ export default function AlertsPage() {
     queryFn: () => api.alerts(listProjectId || undefined),
   })
 
+  function resetForm() {
+    setTarget('')
+    setBotToken('')
+    setChatId('')
+    setSecret('')
+    setWindowSec('300')
+    setThreshold('10')
+    setName('New issue alert')
+    setTrigger('new_issue')
+    setChannel('webhook')
+    setFormError('')
+    setEditing(null)
+  }
+
+  function fillEdit(rule: AlertRule) {
+    setEditing(rule)
+    setFormProjectId(String(rule.project_id))
+    setName(rule.name)
+    setTrigger(rule.trigger)
+    setChannel(rule.channel)
+    setThreshold(String(rule.threshold))
+    setWindowSec(String(rule.window_sec || 300))
+    setSecret('')
+    if (rule.channel === 'telegram') {
+      const i = rule.target.indexOf('|')
+      setBotToken(i > 0 ? rule.target.slice(0, i) : '')
+      setChatId(i > 0 ? rule.target.slice(i + 1) : rule.target)
+      setTarget('')
+    } else {
+      setTarget(rule.target)
+      setBotToken('')
+      setChatId('')
+    }
+    setFormError('')
+    setOpen(true)
+  }
+
   const createMutation = useMutation({
     mutationFn: () => {
       const resolvedTarget =
@@ -148,15 +190,38 @@ export default function AlertsPage() {
         channel,
         target: resolvedTarget,
         threshold: Number(threshold) || 0,
-        window_sec: 300,
-        secret: channel === 'webhook' ? 'dev-secret' : '',
+        window_sec: Number(windowSec) || 300,
+        secret: channel === 'webhook' ? secret : '',
       })
     },
     onSuccess: () => {
-      setTarget('')
-      setBotToken('')
-      setChatId('')
-      setFormError('')
+      resetForm()
+      setOpen(false)
+      void qc.invalidateQueries({ queryKey: ['alerts'] })
+    },
+    onError: (e) => setFormError(String(e)),
+  })
+
+  const updateMutation = useMutation({
+    mutationFn: () => {
+      if (!editing) throw new Error('No rule selected')
+      const resolvedTarget =
+        channel === 'telegram' ? `${botToken.trim()}|${chatId.trim()}` : target
+      const body: Record<string, unknown> = {
+        name,
+        trigger,
+        channel,
+        target: resolvedTarget,
+        threshold: Number(threshold) || 0,
+        window_sec: Number(windowSec) || 300,
+      }
+      if (channel === 'webhook' && secret.trim()) {
+        body.secret = secret.trim()
+      }
+      return api.updateAlert(editing.id, body)
+    },
+    onSuccess: () => {
+      resetForm()
       setOpen(false)
       void qc.invalidateQueries({ queryKey: ['alerts'] })
     },
@@ -267,7 +332,6 @@ export default function AlertsPage() {
         id: 'enabled',
         accessorFn: (r) => String(r.enabled),
         enableColumnFilter: true,
-        enableHiding: true,
         meta: {
           label: 'Enabled',
           variant: 'select',
@@ -276,11 +340,7 @@ export default function AlertsPage() {
         header: ({ column }) => (
           <DataTableColumnHeader column={column} label="Enabled" />
         ),
-        cell: ({ row }) => (
-          <span className="text-muted-foreground">
-            {row.original.enabled ? 'Enabled' : 'Disabled'}
-          </span>
-        ),
+        cell: ({ row }) => <AlertEnabledSwitch rule={row.original} />,
         filterFn: (row, _id, value) => {
           const selected = Array.isArray(value)
             ? value.map(String)
@@ -289,21 +349,55 @@ export default function AlertsPage() {
         },
       },
       {
+        id: 'last_delivered_at',
+        accessorFn: (r) => r.last_delivered_at ?? '',
+        meta: { label: 'Last delivery' },
+        header: ({ column }) => (
+          <DataTableColumnHeader column={column} label="Last delivery" />
+        ),
+        cell: ({ row }) => (
+          <span
+            className="text-muted-foreground"
+            title={formatTime(row.original.last_delivered_at)}
+          >
+            {row.original.last_delivered_at
+              ? `${formatRelativeTime(row.original.last_delivered_at)}${
+                  row.original.last_delivery_status
+                    ? ` · ${row.original.last_delivery_status}`
+                    : ''
+                }`
+              : 'Never'}
+          </span>
+        ),
+      },
+      {
         id: 'actions',
         enableSorting: false,
         enableHiding: false,
         header: () => <span className="sr-only">Actions</span>,
         cell: ({ row }) => (
-          <Button
-            type="button"
-            size="sm"
-            variant="outline"
-            aria-label={`Delete ${row.original.name}`}
-            onClick={() => setDeleteTarget(row.original)}
-          >
-            <Trash2Icon data-icon="inline-start" />
-            Delete
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              aria-label={`Edit ${row.original.name}`}
+              onClick={() => fillEdit(row.original)}
+            >
+              <PencilIcon data-icon="inline-start" />
+              Edit
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              aria-label={`Delete ${row.original.name}`}
+              onClick={() => setDeleteTarget(row.original)}
+            >
+              <Trash2Icon data-icon="inline-start" />
+              Delete
+            </Button>
+          </div>
         ),
       },
     ],
@@ -322,7 +416,6 @@ export default function AlertsPage() {
     initialState: {
       sorting: [{ id: 'name', desc: false }],
       pagination: { pageIndex: 0, pageSize: 20 },
-      columnVisibility: { enabled: false },
     },
   })
 
@@ -332,11 +425,14 @@ export default function AlertsPage() {
       ? String(deleteMutation.error)
       : ''
 
-  function onCreate(e: FormEvent) {
+  function onSubmit(e: FormEvent) {
     e.preventDefault()
     if (!formProject) return
-    createMutation.mutate()
+    if (editing) updateMutation.mutate()
+    else createMutation.mutate()
   }
+
+  const saving = createMutation.isPending || updateMutation.isPending
 
   return (
     <section className="flex flex-col gap-4">
@@ -348,7 +444,8 @@ export default function AlertsPage() {
             open={open}
             onOpenChange={(next) => {
               setOpen(next)
-              if (next && !formProjectId && defaultProjectId) {
+              if (!next) resetForm()
+              if (next && !editing && !formProjectId && defaultProjectId) {
                 setFormProjectId(defaultProjectId)
               }
             }}
@@ -366,19 +463,22 @@ export default function AlertsPage() {
             </DialogTrigger>
             <DialogContent className="sm:max-w-lg">
               <DialogHeader>
-                <DialogTitle>Create alert rule</DialogTitle>
+                <DialogTitle>
+                  {editing ? 'Edit alert rule' : 'Create alert rule'}
+                </DialogTitle>
                 <DialogDescription>
                   Delivered via Slack, email, webhook, or Telegram for the
                   selected project.
                 </DialogDescription>
               </DialogHeader>
-              <form onSubmit={onCreate} className="flex flex-col gap-4">
+              <form onSubmit={onSubmit} className="flex flex-col gap-4">
                 <FieldGroup className="grid gap-3 sm:grid-cols-2">
                   <Field className="sm:col-span-2">
                     <FieldLabel>Project</FieldLabel>
                     <Select
                       items={projectItems}
                       value={formProject || undefined}
+                      disabled={Boolean(editing)}
                       onValueChange={(v) =>
                         setFormProjectId(v == null ? '' : String(v))
                       }
@@ -487,20 +587,53 @@ export default function AlertsPage() {
                       placeholder="10"
                     />
                   </Field>
+                  <Field>
+                    <FieldLabel>Window (seconds)</FieldLabel>
+                    <Input
+                      value={windowSec}
+                      onChange={(e) => setWindowSec(e.target.value)}
+                      placeholder="300"
+                    />
+                    <FieldDescription>
+                      Cooldown between deliveries for this rule.
+                    </FieldDescription>
+                  </Field>
+                  {channel === 'webhook' ? (
+                    <Field className="sm:col-span-2">
+                      <FieldLabel>HMAC secret</FieldLabel>
+                      <Input
+                        type="password"
+                        autoComplete="off"
+                        value={secret}
+                        onChange={(e) => setSecret(e.target.value)}
+                        placeholder={
+                          editing
+                            ? 'Leave blank to keep the current secret'
+                            : 'Signing secret for X-Sentry-Lite-Signature'
+                        }
+                      />
+                      <FieldDescription>
+                        Used to sign webhook payloads. Set your own secret —
+                        never reuse a shared default.
+                      </FieldDescription>
+                    </Field>
+                  ) : null}
                 </FieldGroup>
                 {formError && (
                   <Alert variant="destructive">
                     <AlertCircleIcon />
-                    <AlertTitle>Create failed</AlertTitle>
+                    <AlertTitle>
+                      {editing ? 'Save failed' : 'Create failed'}
+                    </AlertTitle>
                     <AlertDescription>{formError}</AlertDescription>
                   </Alert>
                 )}
                 <DialogFooter>
                   <Button
                     type="submit"
-                    disabled={createMutation.isPending || !formProject}
+                    disabled={saving || !formProject}
                   >
-                    Create
+                    {editing ? 'Save' : 'Create'}
                   </Button>
                 </DialogFooter>
               </form>
@@ -555,12 +688,37 @@ export default function AlertsPage() {
       )}
 
       {rulesQuery.isLoading || projectsQuery.isLoading ? (
-        <Skeleton className="h-48 w-full" />
+        <DataTableSkeleton columnCount={7} filterCount={4} rowCount={6} />
+      ) : rawRules.length === 0 ? (
+        <PageEmpty
+          title="No alert rules"
+          description="Create a rule to notify on new issues, volume, or missed crons."
+        />
       ) : (
         <DataTable table={table}>
           <ListDataTableFilters table={table} />
         </DataTable>
       )}
     </section>
+  )
+}
+
+function AlertEnabledSwitch({ rule }: { rule: AlertRule }) {
+  const qc = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: (enabled: boolean) => api.updateAlert(rule.id, { enabled }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['alerts'] })
+    },
+  })
+
+  return (
+    <Switch
+      size="sm"
+      checked={rule.enabled}
+      disabled={mutation.isPending}
+      aria-label={rule.enabled ? `Disable ${rule.name}` : `Enable ${rule.name}`}
+      onCheckedChange={(checked) => mutation.mutate(Boolean(checked))}
+    />
   )
 }

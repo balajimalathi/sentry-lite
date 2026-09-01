@@ -4,11 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -17,8 +18,10 @@ import (
 )
 
 type Handler struct {
-	Store *store.Store
-	Bus   *bus.Bus
+	Store     *store.Store
+	Bus       *bus.Bus
+	IngestRPS int
+	limiters  sync.Map
 }
 
 type IngestMessage struct {
@@ -45,9 +48,17 @@ func (h *Handler) HandleEnvelope(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	if !h.allowIngest(projectID) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+		return
+	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
+	body, err := readIngestBody(r)
 	if err != nil {
+		if errors.Is(err, errBodyTooLarge) {
+			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "read body", http.StatusBadRequest)
 		return
 	}
@@ -90,9 +101,17 @@ func (h *Handler) HandleStore(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	if !h.allowIngest(projectID) {
+		http.Error(w, "rate limited", http.StatusTooManyRequests)
+		return
+	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, 32<<20))
+	body, err := readIngestBody(r)
 	if err != nil {
+		if errors.Is(err, errBodyTooLarge) {
+			http.Error(w, "body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		http.Error(w, "read body", http.StatusBadRequest)
 		return
 	}

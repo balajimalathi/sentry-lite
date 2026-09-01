@@ -1,5 +1,6 @@
-import { useEffect, useState, type FormEvent } from 'react'
+import { useState, type FormEvent } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircleIcon } from 'lucide-react'
 import {
   api,
@@ -7,9 +8,10 @@ import {
   formatTime,
   parsePayload,
   type Event,
-  type Frame,
   type Issue,
 } from '@/api'
+import { EventDetailSheet } from '@/components/event-detail-sheet'
+import { StackTrace } from '@/components/stack-trace'
 import { toTitleCase } from '@/lib/format'
 import { statusVariant } from '@/lib/status'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -65,47 +67,59 @@ import {
 
 export default function IssueDetailPage() {
   const { id = '' } = useParams()
-  const [issue, setIssue] = useState<Issue | null>(null)
-  const [latest, setLatest] = useState<Event | null>(null)
-  const [events, setEvents] = useState<Event[]>([])
+  const qc = useQueryClient()
   const [expanded, setExpanded] = useState(true)
-  const [error, setError] = useState('')
   const [assigneeDraft, setAssigneeDraft] = useState('')
   const [ownerOpen, setOwnerOpen] = useState(false)
+  const [eventId, setEventId] = useState<string | null>(null)
 
-  async function load() {
-    const [detail, evs] = await Promise.all([api.issue(id), api.events(id)])
-    setIssue(detail.issue)
-    setAssigneeDraft(detail.issue.assignee ?? '')
-    setLatest(detail.latest_event)
-    setEvents(evs)
-  }
+  const detailQuery = useQuery({
+    queryKey: ['issue', id],
+    queryFn: () => api.issue(id),
+    enabled: Boolean(id),
+  })
+  const eventsQuery = useQuery({
+    queryKey: ['issue-events', id],
+    queryFn: () => api.events(id),
+    enabled: Boolean(id),
+  })
 
-  useEffect(() => {
-    load().catch((e) => setError(String(e)))
-  }, [id])
+  const issue = detailQuery.data?.issue ?? null
+  const latest = detailQuery.data?.latest_event ?? null
+  const events = eventsQuery.data ?? []
 
-  async function setStatus(status: string) {
-    if (!issue) return
-    const updated = await api.updateStatus(issue.id, status)
-    setIssue(updated)
-  }
+  const statusMutation = useMutation({
+    mutationFn: (status: string) => api.updateStatus(Number(id), status),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['issue', id] })
+      void qc.invalidateQueries({ queryKey: ['issues'] })
+    },
+  })
+  const assigneeMutation = useMutation({
+    mutationFn: (assignee: string) => api.updateAssignee(Number(id), assignee),
+    onSuccess: (updated: Issue) => {
+      setAssigneeDraft(updated.assignee ?? '')
+      setOwnerOpen(false)
+      void qc.invalidateQueries({ queryKey: ['issue', id] })
+      void qc.invalidateQueries({ queryKey: ['issues'] })
+    },
+  })
 
   function onOwnerOpenChange(next: boolean) {
     setOwnerOpen(next)
-    if (next && issue) {
-      setAssigneeDraft(issue.assignee ?? '')
-    }
+    if (next && issue) setAssigneeDraft(issue.assignee ?? '')
   }
 
-  async function saveAssignee(e: FormEvent) {
+  function saveAssignee(e: FormEvent) {
     e.preventDefault()
-    if (!issue) return
-    const updated = await api.updateAssignee(issue.id, assigneeDraft.trim())
-    setIssue(updated)
-    setAssigneeDraft(updated.assignee ?? '')
-    setOwnerOpen(false)
+    assigneeMutation.mutate(assigneeDraft.trim())
   }
+
+  const error = detailQuery.error
+    ? String(detailQuery.error)
+    : eventsQuery.error
+      ? String(eventsQuery.error)
+      : ''
 
   if (error) {
     return (
@@ -117,7 +131,7 @@ export default function IssueDetailPage() {
     )
   }
 
-  if (!issue) {
+  if (detailQuery.isLoading || !issue) {
     return (
       <div className="flex flex-col gap-4">
         <Skeleton className="h-4 w-40" />
@@ -133,7 +147,7 @@ export default function IssueDetailPage() {
   }
 
   const payload = parsePayload(latest)
-  const frames: Frame[] = payload?.frames ?? []
+  const frames = payload?.frames ?? []
   const tags = latest?.tags ?? payload?.tags ?? {}
   const breadcrumbs = payload?.breadcrumbs ?? []
   const traceId = latest?.trace_id ?? payload?.trace_id ?? null
@@ -208,21 +222,29 @@ export default function IssueDetailPage() {
                   </Field>
                 </FieldGroup>
                 <DialogFooter>
-                  <Button type="submit">Save owner</Button>
+                  <Button type="submit" disabled={assigneeMutation.isPending}>
+                    Save owner
+                  </Button>
                 </DialogFooter>
               </form>
             </DialogContent>
           </Dialog>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button type="button" size="sm" onClick={() => setStatus('resolved')}>
+          <Button
+            type="button"
+            size="sm"
+            disabled={statusMutation.isPending}
+            onClick={() => statusMutation.mutate('resolved')}
+          >
             Resolve
           </Button>
           <Button
             type="button"
             size="sm"
             variant="secondary"
-            onClick={() => setStatus('ignored')}
+            disabled={statusMutation.isPending}
+            onClick={() => statusMutation.mutate('ignored')}
           >
             Ignore
           </Button>
@@ -230,7 +252,8 @@ export default function IssueDetailPage() {
             type="button"
             size="sm"
             variant="outline"
-            onClick={() => setStatus('open')}
+            disabled={statusMutation.isPending}
+            onClick={() => statusMutation.mutate('open')}
           >
             Reopen
           </Button>
@@ -302,30 +325,7 @@ export default function IssueDetailPage() {
             </CardHeader>
             <CollapsibleContent>
               <CardContent className="min-w-0 overflow-x-auto">
-                {frames.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    No stack frames on latest event.
-                  </p>
-                ) : (
-                  <ol className="flex list-decimal flex-col gap-2 pl-4">
-                    {[...frames].reverse().map((f, i) => (
-                      <li
-                        key={i}
-                        className={
-                          f.in_app
-                            ? 'min-w-0 font-medium text-foreground'
-                            : 'min-w-0 text-muted-foreground'
-                        }
-                      >
-                        <div className="font-mono text-sm break-all">
-                          {f.filename || f.abs_path || f.module || '?'}
-                          {f.lineno ? `:${f.lineno}` : ''}
-                          {f.function ? ` in ${f.function}` : ''}
-                        </div>
-                      </li>
-                    ))}
-                  </ol>
-                )}
+                <StackTrace frames={frames} />
               </CardContent>
             </CollapsibleContent>
           </Card>
@@ -452,10 +452,16 @@ export default function IssueDetailPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {events.map((ev) => (
-                  <TableRow key={ev.event_id}>
+                {events.map((ev: Event) => (
+                  <TableRow
+                    key={ev.event_id}
+                    className="cursor-pointer"
+                    onClick={() => setEventId(ev.event_id)}
+                  >
                     <TableCell className="pl-4 font-mono">
-                      {ev.event_id.slice(0, 16)}
+                      <button type="button" className="underline-offset-4 hover:underline">
+                        {ev.event_id.slice(0, 16)}
+                      </button>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       <span title={formatTime(ev.timestamp)}>
@@ -471,6 +477,13 @@ export default function IssueDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      <EventDetailSheet
+        eventId={eventId}
+        onOpenChange={(open) => {
+          if (!open) setEventId(null)
+        }}
+      />
     </section>
   )
 }

@@ -93,6 +93,7 @@ export type Span = {
   description: string
   duration_ms: number
   status: string
+  start_offset_ms?: number
 }
 
 export type TransactionSample = {
@@ -155,6 +156,8 @@ export type AlertRule = {
   window_sec: number
   enabled: boolean
   created_at: string
+  last_delivered_at?: string | null
+  last_delivery_status?: string | null
 }
 
 export type StatsBucket = {
@@ -219,16 +222,47 @@ async function post<T>(path: string, body: unknown): Promise<T> {
     const text = await res.text().catch(() => '')
     throw new Error(text || `${res.status} ${res.statusText}`)
   }
+  if (res.status === 204) return undefined as T
   return res.json()
+}
+
+async function patch<T>(path: string, body: unknown): Promise<T> {
+  const res = await apiFetch(path, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `${res.status} ${res.statusText}`)
+  }
+  return res.json()
+}
+
+async function del(path: string): Promise<void> {
+  const res = await apiFetch(path, { method: 'DELETE' })
+  if (!res.ok) {
+    const text = await res.text().catch(() => '')
+    throw new Error(text || `${res.status} ${res.statusText}`)
+  }
 }
 
 export const api = {
   projects: () => get<Project[]>('/api/internal/projects'),
+  project: (id: number | string) =>
+    get<CreatedProject>(`/api/internal/projects/${id}`),
   createProject: (body: {
     name: string
     slug?: string
     allowed_origins?: string[]
   }) => post<CreatedProject>('/api/internal/projects', body),
+  updateProject: (
+    id: number,
+    body: { name: string; allowed_origins?: string[] }
+  ) => patch<Project>(`/api/internal/projects/${id}`, body),
+  deleteProject: (id: number) => del(`/api/internal/projects/${id}`),
+  rotateProjectKey: (id: number) =>
+    post<CreatedProject>(`/api/internal/projects/${id}/rotate-key`, {}),
   facets: (projectId?: string) =>
     get<Facets>(
       projectId
@@ -245,24 +279,12 @@ export const api = {
   issue: (id: string) =>
     get<{ issue: Issue; latest_event: Event | null }>(`/api/internal/issues/${id}`),
   events: (id: string) => get<Event[]>(`/api/internal/issues/${id}/events`),
-  updateStatus: async (id: number, status: string) => {
-    const res = await apiFetch(`/api/internal/issues/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ status }),
-    })
-    if (!res.ok) throw new Error(`${res.status}`)
-    return res.json() as Promise<Issue>
-  },
-  updateAssignee: async (id: number, assignee: string) => {
-    const res = await apiFetch(`/api/internal/issues/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ assignee }),
-    })
-    if (!res.ok) throw new Error(`${res.status}`)
-    return res.json() as Promise<Issue>
-  },
+  event: (eventId: string) =>
+    get<Event>(`/api/internal/events/${encodeURIComponent(eventId)}`),
+  updateStatus: (id: number, status: string) =>
+    patch<Issue>(`/api/internal/issues/${id}`, { status }),
+  updateAssignee: (id: number, assignee: string) =>
+    patch<Issue>(`/api/internal/issues/${id}`, { assignee }),
   releases: (projectId: string) =>
     get<Release[]>(`/api/internal/releases?project_id=${projectId}`),
   createRelease: (body: {
@@ -284,11 +306,11 @@ export const api = {
     channel: string
     target: string
     secret?: string
+    window_sec?: number
   }) => post<AlertRule>('/api/internal/alerts', body),
-  deleteAlert: async (id: number) => {
-    const res = await apiFetch(`/api/internal/alerts/${id}`, { method: 'DELETE' })
-    if (!res.ok) throw new Error(`${res.status}`)
-  },
+  updateAlert: (id: number, body: Record<string, unknown>) =>
+    patch<AlertRule>(`/api/internal/alerts/${id}`, body),
+  deleteAlert: (id: number) => del(`/api/internal/alerts/${id}`),
   transactions: (projectId: string) =>
     get<TransactionSummary[]>(
       `/api/internal/transactions?project_id=${projectId}`
@@ -317,10 +339,7 @@ export const api = {
     grace_sec?: number
     environment?: string
   }) => post<CronMonitor>('/api/internal/crons', body),
-  deleteCron: async (id: number) => {
-    const res = await apiFetch(`/api/internal/crons/${id}`, { method: 'DELETE' })
-    if (!res.ok) throw new Error(`${res.status}`)
-  },
+  deleteCron: (id: number) => del(`/api/internal/crons/${id}`),
   stats: (params: {
     project_id?: string
     from: string
@@ -385,6 +404,7 @@ export function parsePayload(ev: Event | null) {
       exception_type?: string
       message?: string
       trace_id?: string
+      request?: Record<string, unknown>
     }
   } catch {
     return null

@@ -152,6 +152,7 @@ type SpanRow struct {
 	Op                 string  `gorm:"column:op;not null;default:''"`
 	Description        string  `gorm:"column:description;not null;default:''"`
 	DurationMS         float64 `gorm:"column:duration_ms;not null;default:0"`
+	StartOffsetMS      float64 `gorm:"column:start_offset_ms;not null;default:0"`
 	Status             string  `gorm:"column:status;not null;default:''"`
 }
 

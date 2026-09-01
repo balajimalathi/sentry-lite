@@ -6,7 +6,13 @@ import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
 import { api, formatRelativeTime, formatTime, type Release } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
+import { DataTableSkeleton } from '@/components/data-table/data-table-skeleton'
 import { ListDataTableFilters } from '@/components/list-data-table-filters'
+import {
+  CreateProjectEmpty,
+  PageEmpty,
+  SelectProjectEmpty,
+} from '@/components/page-empty'
 import {
   PageHeader,
   PageHeaderActionLabel,
@@ -32,8 +38,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Skeleton } from '@/components/ui/skeleton'
 import { useDataTable } from '@/hooks/use-data-table'
+import { EMPTY_PROJECTS } from '@/hooks/use-project-filter'
 import { firstFilterValue } from '@/lib/row-filters'
 
 const BASIC_FILTER_KEYS = ['project_id', 'version'] as const
@@ -65,7 +71,7 @@ export default function ReleasesPage() {
     queryFn: () => api.projects(),
   })
 
-  const projects = projectsQuery.data ?? []
+  const projects = projectsQuery.data ?? EMPTY_PROJECTS
   const projectOptions = useMemo(
     () => projects.map((p) => ({ label: p.name, value: String(p.id) })),
     [projects]
@@ -76,8 +82,7 @@ export default function ReleasesPage() {
     basicColumnFilters.find((f) => f.id === 'project_id')?.value
   )
 
-  const projectId =
-    selectedProjectId || (projects[0] ? String(projects[0].id) : '')
+  const projectId = selectedProjectId
 
   const formProject =
     formProjectId || projectId || (projects[0] ? String(projects[0].id) : '')
@@ -300,8 +305,17 @@ export default function ReleasesPage() {
         </Alert>
       )}
 
-      {releasesQuery.isLoading || projectsQuery.isLoading ? (
-        <Skeleton className="h-48 w-full" />
+      {projectsQuery.isLoading || (!!projectId && releasesQuery.isLoading) ? (
+        <DataTableSkeleton columnCount={5} filterCount={2} rowCount={6} />
+      ) : projects.length === 0 ? (
+        <CreateProjectEmpty />
+      ) : !projectId ? (
+        <SelectProjectEmpty />
+      ) : rawReleases.length === 0 ? (
+        <PageEmpty
+          title="No releases yet"
+          description="Register a version to track issue and event health for this project."
+        />
       ) : (
         <DataTable table={table}>
           <ListDataTableFilters table={table} />

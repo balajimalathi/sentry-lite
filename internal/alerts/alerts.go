@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/smtp"
 	"net/url"
@@ -23,6 +24,8 @@ type Dispatcher struct {
 	APIBase string // e.g. http://localhost:8080 for issue links
 	From    string // SMTP from
 	SMTP    string // host:port, empty disables email
+	SMTPUser string
+	SMTPPass string
 }
 
 type Event struct {
@@ -48,6 +51,20 @@ func (d *Dispatcher) Handle(ctx context.Context, ev Event) {
 				continue
 			}
 			ev.Summary = fmt.Sprintf("%d events in last %ds (threshold %d)", n, rule.WindowSec, rule.Threshold)
+		}
+		window := time.Duration(rule.WindowSec) * time.Second
+		if window <= 0 {
+			window = 5 * time.Minute
+		}
+		issueScope := ev.IssueID
+		if ev.Trigger == "error_volume" || ev.Trigger == "cron_missed" {
+			issueScope = 0
+		}
+		recent, err := d.Store.HasRecentDelivery(ctx, rule.ID, issueScope, window)
+		if err != nil {
+			log.Printf("alert cooldown rule=%d: %v", rule.ID, err)
+		} else if recent {
+			continue
 		}
 		if err := d.deliver(ctx, rule, ev); err != nil {
 			log.Printf("alert deliver rule=%d: %v", rule.ID, err)
@@ -167,7 +184,15 @@ func (d *Dispatcher) email(to, subject, body string) error {
 		from = "sentry-lite@localhost"
 	}
 	msg := []byte("To: " + to + "\r\nSubject: " + subject + "\r\n\r\n" + body)
-	return smtp.SendMail(d.SMTP, nil, from, []string{to}, msg)
+	var auth smtp.Auth
+	if d.SMTPUser != "" {
+		host := d.SMTP
+		if h, _, err := net.SplitHostPort(d.SMTP); err == nil {
+			host = h
+		}
+		auth = smtp.PlainAuth("", d.SMTPUser, d.SMTPPass, host)
+	}
+	return smtp.SendMail(d.SMTP, auth, from, []string{to}, msg)
 }
 
 func (d *Dispatcher) webhook(ctx context.Context, rule store.AlertRule, body map[string]any) error {
