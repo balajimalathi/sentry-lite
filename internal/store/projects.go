@@ -79,6 +79,30 @@ func randomKey() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+const DemoPublicKey = "a1b2c3d4e5f6789012345678abcdef01"
+
+func FormatDSN(publicHost, publicKey string, projectID int64) string {
+	if publicHost == "" {
+		publicHost = "http://localhost:8080"
+	}
+	publicHost = strings.TrimRight(publicHost, "/")
+	host := strings.TrimPrefix(publicHost, "http://")
+	host = strings.TrimPrefix(host, "https://")
+	scheme := "http"
+	if strings.HasPrefix(publicHost, "https://") {
+		scheme = "https"
+	}
+	return fmt.Sprintf("%s://%s@%s/%d", scheme, publicKey, host, projectID)
+}
+
+func defaultDemoOrigins() []string {
+	return []string{
+		"http://localhost:5173",
+		"http://localhost:3000",
+		"http://localhost:8080",
+	}
+}
+
 func (s *Store) ProjectExists(ctx context.Context, projectID int64) (bool, error) {
 	if projectID <= 0 {
 		return false, nil
@@ -89,6 +113,10 @@ func (s *Store) ProjectExists(ctx context.Context, projectID int64) (bool, error
 }
 
 func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string, allowedOrigins []string) (*CreatedProject, error) {
+	return s.createProjectWithKey(ctx, name, slug, publicHost, allowedOrigins, "", "")
+}
+
+func (s *Store) insertProject(ctx context.Context, name, slug, publicHost string, allowedOrigins []string, pub, sec string) (*CreatedProject, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		return nil, fmt.Errorf("name required")
@@ -127,15 +155,6 @@ func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string
 		}
 	}
 
-	pub, err := randomKey()
-	if err != nil {
-		return nil, err
-	}
-	sec, err := randomKey()
-	if err != nil {
-		return nil, err
-	}
-
 	var projectID int64
 	var createdAt string
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
@@ -164,16 +183,6 @@ func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string
 	if createdAt == "" {
 		_ = s.DB.WithContext(ctx).Model(&ProjectRow{}).Select("created_at").Where("id = ?", projectID).Scan(&createdAt).Error
 	}
-	if publicHost == "" {
-		publicHost = "http://localhost:8080"
-	}
-	publicHost = strings.TrimRight(publicHost, "/")
-	host := strings.TrimPrefix(publicHost, "http://")
-	host = strings.TrimPrefix(host, "https://")
-	scheme := "http"
-	if strings.HasPrefix(publicHost, "https://") {
-		scheme = "https"
-	}
 
 	return &CreatedProject{
 		Project: Project{
@@ -185,8 +194,232 @@ func (s *Store) CreateProject(ctx context.Context, name, slug, publicHost string
 		},
 		PublicKey: pub,
 		SecretKey: sec,
-		DSN:       fmt.Sprintf("%s://%s@%s/%d", scheme, pub, host, projectID),
+		DSN:       FormatDSN(publicHost, pub, projectID),
 	}, nil
+}
+
+// SeedDemoProject creates the documented first-boot demo project when the DB
+// has no projects. The public key matches the README seed DSN.
+func (s *Store) SeedDemoProject(ctx context.Context, publicHost string) (*CreatedProject, error) {
+	var n int64
+	if err := s.DB.WithContext(ctx).Model(&ProjectRow{}).Count(&n).Error; err != nil {
+		return nil, err
+	}
+	if n > 0 {
+		return nil, nil
+	}
+	created, err := s.createProjectWithKey(ctx, "Demo", "demo", publicHost, defaultDemoOrigins(), DemoPublicKey, "")
+	if err != nil {
+		return nil, err
+	}
+	return created, nil
+}
+
+func (s *Store) createProjectWithKey(ctx context.Context, name, slug, publicHost string, allowedOrigins []string, pub, sec string) (*CreatedProject, error) {
+	if pub == "" {
+		var err error
+		pub, err = randomKey()
+		if err != nil {
+			return nil, err
+		}
+	}
+	if sec == "" {
+		var err error
+		sec, err = randomKey()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return s.insertProject(ctx, name, slug, publicHost, allowedOrigins, pub, sec)
+}
+
+func (s *Store) GetProject(ctx context.Context, id int64) (*Project, error) {
+	var row ProjectRow
+	err := s.DB.WithContext(ctx).First(&row, id).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &Project{
+		ID:             row.ID,
+		Slug:           row.Slug,
+		Name:           row.Name,
+		AllowedOrigins: decodeOriginsJSON(row.AllowedOrigins),
+		CreatedAt:      row.CreatedAt,
+	}, nil
+}
+
+func (s *Store) GetProjectDSN(ctx context.Context, id int64, publicHost string) (*CreatedProject, error) {
+	proj, err := s.GetProject(ctx, id)
+	if err != nil || proj == nil {
+		return nil, err
+	}
+	key, err := s.latestProjectKey(ctx, id)
+	if err != nil || key == nil {
+		return nil, err
+	}
+	return &CreatedProject{
+		Project:   *proj,
+		PublicKey: key.PublicKey,
+		SecretKey: key.SecretKey,
+		DSN:       FormatDSN(publicHost, key.PublicKey, id),
+	}, nil
+}
+
+func (s *Store) latestProjectKey(ctx context.Context, projectID int64) (*ProjectKey, error) {
+	var row ProjectKeyRow
+	err := s.DB.WithContext(ctx).
+		Where("project_id = ?", projectID).
+		Order("id DESC").
+		First(&row).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &ProjectKey{
+		ProjectID: row.ProjectID,
+		PublicKey: row.PublicKey,
+		SecretKey: row.SecretKey,
+	}, nil
+}
+
+func (s *Store) UpdateProject(ctx context.Context, id int64, name string, allowedOrigins []string) (*Project, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("name required")
+	}
+	res := s.DB.WithContext(ctx).Model(&ProjectRow{}).Where("id = ?", id).Updates(map[string]any{
+		"name":            name,
+		"allowed_origins": encodeOriginsJSON(allowedOrigins),
+	})
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	if res.RowsAffected == 0 {
+		return nil, nil
+	}
+	return s.GetProject(ctx, id)
+}
+
+func (s *Store) RotateProjectKey(ctx context.Context, id int64, publicHost string) (*CreatedProject, error) {
+	exists, err := s.ProjectExists(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	pub, err := randomKey()
+	if err != nil {
+		return nil, err
+	}
+	sec, err := randomKey()
+	if err != nil {
+		return nil, err
+	}
+	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("project_id = ?", id).Delete(&ProjectKeyRow{}).Error; err != nil {
+			return err
+		}
+		return tx.Create(&ProjectKeyRow{
+			ProjectID: id,
+			PublicKey: pub,
+			SecretKey: sec,
+		}).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	return s.GetProjectDSN(ctx, id, publicHost)
+}
+
+func (s *Store) DeleteProject(ctx context.Context, id int64) (rawPaths []string, err error) {
+	exists, err := s.ProjectExists(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+
+	var eventPaths []string
+	if err := s.DB.WithContext(ctx).Model(&EventRow{}).Where("project_id = ?", id).Pluck("raw_path", &eventPaths).Error; err != nil {
+		return nil, err
+	}
+	var txPaths []string
+	if err := s.DB.WithContext(ctx).Model(&TransactionRow{}).Where("project_id = ?", id).Pluck("raw_path", &txPaths).Error; err != nil {
+		return nil, err
+	}
+	rawPaths = append(eventPaths, txPaths...)
+
+	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var ruleIDs []int64
+		if err := tx.Model(&AlertRuleRow{}).Where("project_id = ?", id).Pluck("id", &ruleIDs).Error; err != nil {
+			return err
+		}
+		if len(ruleIDs) > 0 {
+			if err := tx.Where("rule_id IN ?", ruleIDs).Delete(&AlertDeliveryRow{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ?", id).Delete(&AlertRuleRow{}).Error; err != nil {
+				return err
+			}
+		}
+		var monitorIDs []int64
+		if err := tx.Model(&CronMonitorRow{}).Where("project_id = ?", id).Pluck("id", &monitorIDs).Error; err != nil {
+			return err
+		}
+		if len(monitorIDs) > 0 {
+			if err := tx.Where("monitor_id IN ?", monitorIDs).Delete(&CronCheckinRow{}).Error; err != nil {
+				return err
+			}
+			if err := tx.Where("project_id = ?", id).Delete(&CronMonitorRow{}).Error; err != nil {
+				return err
+			}
+		}
+		var txEventIDs []string
+		if err := tx.Model(&TransactionRow{}).Where("project_id = ?", id).Pluck("event_id", &txEventIDs).Error; err != nil {
+			return err
+		}
+		if len(txEventIDs) > 0 {
+			if err := tx.Where("transaction_event_id IN ?", txEventIDs).Delete(&SpanRow{}).Error; err != nil {
+				return err
+			}
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&TransactionStatRow{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&TransactionRow{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&EventTagRow{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&EventRow{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&IssueRow{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&ReleaseRow{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&ProjectKeyRow{}).Error; err != nil {
+			return err
+		}
+		return tx.Delete(&ProjectRow{}, id).Error
+	})
+	if err != nil {
+		return nil, err
+	}
+	if rawPaths == nil {
+		rawPaths = []string{}
+	}
+	return rawPaths, nil
 }
 
 // ProjectAllowedOrigins returns the CORS allowlist for a project.

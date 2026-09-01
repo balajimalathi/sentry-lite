@@ -26,11 +26,13 @@ docker compose -f docker-compose.redpanda.yml up -d
 go run ./cmd/sentry-lite-tui   # or start API + web separately (see README)
 ```
 
-Smoke tests:
+Smoke tests (API + Redpanda running):
 
 ```bash
-cd examples/node-sdk && bun install && bun run send.ts
+cd examples/nextjs && bun install && bun run dev
 ```
+
+The playground talks to the seed DSN on project `1` or a project you create in the UI. Check [examples/nextjs/README.md](examples/nextjs/README.md) if the example DSN is a different project.
 
 ## Guidelines
 

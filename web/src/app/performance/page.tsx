@@ -7,10 +7,15 @@ import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
 import { api, type TransactionSummary } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
+import { DataTableSkeleton } from '@/components/data-table/data-table-skeleton'
 import { ListDataTableFilters } from '@/components/list-data-table-filters'
+import {
+  CreateProjectEmpty,
+  PageEmpty,
+  SelectProjectEmpty,
+} from '@/components/page-empty'
 import { PageHeader } from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
-import { Skeleton } from '@/components/ui/skeleton'
 import { useDataTable } from '@/hooks/use-data-table'
 import { firstFilterValue } from '@/lib/row-filters'
 
@@ -48,11 +53,9 @@ export default function PerformancePage() {
     [projects]
   )
 
-  const selectedProjectId = firstFilterValue(
+  const projectId = firstFilterValue(
     basicColumnFilters.find((f) => f.id === 'project_id')?.value
   )
-  const projectId =
-    selectedProjectId || (projects[0] ? String(projects[0].id) : '')
 
   const transactionsQuery = useQuery({
     queryKey: ['transactions', projectId],
@@ -171,6 +174,9 @@ export default function PerformancePage() {
     )
   }
 
+  const loading = projectsQuery.isLoading || (!!projectId && transactionsQuery.isLoading)
+  const rows = transactionsQuery.data ?? []
+
   return (
     <section className="flex flex-col gap-4">
       <PageHeader
@@ -178,8 +184,17 @@ export default function PerformancePage() {
         description="Transaction latency (p95 / p99)."
       />
 
-      {transactionsQuery.isLoading || projectsQuery.isLoading ? (
-        <Skeleton className="h-48 w-full" />
+      {loading ? (
+        <DataTableSkeleton columnCount={5} filterCount={2} rowCount={8} />
+      ) : projects.length === 0 ? (
+        <CreateProjectEmpty />
+      ) : !projectId ? (
+        <SelectProjectEmpty />
+      ) : rows.length === 0 ? (
+        <PageEmpty
+          title="No transactions yet"
+          description="Enable tracing in your Sentry SDK (tracesSampleRate) and send traffic."
+        />
       ) : (
         <DataTable table={table}>
           <ListDataTableFilters table={table} />

@@ -1,18 +1,26 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
-import { AlertCircleIcon } from 'lucide-react'
+import { AlertCircleIcon, MoreHorizontalIcon } from 'lucide-react'
 import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
 import { api, formatRelativeTime, formatTime, type Issue } from '@/api'
 import { DataTable } from '@/components/data-table/data-table'
 import { DataTableColumnHeader } from '@/components/data-table/data-table-column-header'
+import { DataTableSkeleton } from '@/components/data-table/data-table-skeleton'
 import { ListDataTableFilters } from '@/components/list-data-table-filters'
 import { ListFilterModeToggle } from '@/components/list-filter-mode-toggle'
+import { PageEmpty } from '@/components/page-empty'
 import { PageHeader } from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
-import { Skeleton } from '@/components/ui/skeleton'
+import { Button } from '@/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { useDataTable } from '@/hooks/use-data-table'
 import {
   clearBasicFilterRecord,
@@ -368,6 +376,13 @@ export default function IssuesPage() {
           </span>
         ),
       },
+      {
+        id: 'actions',
+        enableSorting: false,
+        enableHiding: false,
+        header: () => <span className="sr-only">Actions</span>,
+        cell: ({ row }) => <IssueRowActions issue={row.original} />,
+      },
     ],
     [
       statusOptions,
@@ -430,12 +445,73 @@ export default function IssuesPage() {
       />
 
       {issuesQuery.isLoading ? (
-        <Skeleton className="h-48 w-full" />
+        <DataTableSkeleton columnCount={8} filterCount={4} rowCount={8} />
+      ) : rawIssues.length === 0 ? (
+        <PageEmpty
+          title="No issues yet"
+          description="Send an event with your project DSN, or clear filters if you expected results."
+          action={
+            <Link
+              to="/projects"
+              className="text-sm font-medium underline-offset-4 hover:underline"
+            >
+              Copy a DSN from Projects
+            </Link>
+          }
+        />
       ) : (
         <DataTable table={table}>
           <ListDataTableFilters table={table} filterMode={filterMode} />
         </DataTable>
       )}
     </section>
+  )
+}
+
+function IssueRowActions({ issue }: { issue: Issue }) {
+  const qc = useQueryClient()
+  const mutation = useMutation({
+    mutationFn: (status: string) => api.updateStatus(issue.id, status),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['issues'] })
+      void qc.invalidateQueries({ queryKey: ['issue', String(issue.id)] })
+    },
+  })
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        render={
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-sm"
+            aria-label={`Triage ${issue.title}`}
+          />
+        }
+      >
+        <MoreHorizontalIcon />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end">
+        <DropdownMenuItem
+          disabled={mutation.isPending || issue.status === 'resolved'}
+          onClick={() => mutation.mutate('resolved')}
+        >
+          Resolve
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={mutation.isPending || issue.status === 'ignored'}
+          onClick={() => mutation.mutate('ignored')}
+        >
+          Ignore
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          disabled={mutation.isPending || issue.status === 'open'}
+          onClick={() => mutation.mutate('open')}
+        >
+          Reopen
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 }

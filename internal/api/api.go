@@ -3,6 +3,8 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ type Handler struct {
 	Store      *store.Store
 	PublicURL  string
 	AdminToken string
+	DataDir    string
 }
 
 func (h *Handler) Routes(r chi.Router) {
@@ -26,17 +29,23 @@ func (h *Handler) Routes(r chi.Router) {
 		}
 		r.Get("/projects", h.ListProjects)
 		r.Post("/projects", h.CreateProject)
+		r.Get("/projects/{id}", h.GetProject)
+		r.Patch("/projects/{id}", h.UpdateProject)
+		r.Delete("/projects/{id}", h.DeleteProject)
+		r.Post("/projects/{id}/rotate-key", h.RotateProjectKey)
 		r.Get("/facets", h.ListFacets)
 		r.Get("/issues", h.ListIssues)
 		r.Get("/issues/{id}", h.GetIssue)
 		r.Get("/issues/{id}/events", h.ListEvents)
 		r.Patch("/issues/{id}", h.UpdateIssue)
+		r.Get("/events/{eventID}", h.GetEvent)
 
 		r.Get("/releases", h.ListReleases)
 		r.Post("/releases", h.CreateRelease)
 
 		r.Get("/alerts", h.ListAlerts)
 		r.Post("/alerts", h.CreateAlert)
+		r.Patch("/alerts/{id}", h.UpdateAlert)
 		r.Delete("/alerts/{id}", h.DeleteAlert)
 
 		r.Get("/transactions", h.ListTransactions)
@@ -87,6 +96,110 @@ func (h *Handler) CreateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	w.WriteHeader(http.StatusCreated)
 	writeJSON(w, created)
+}
+
+func (h *Handler) GetProject(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	created, err := h.Store.GetProjectDSN(r.Context(), id, h.PublicURL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if created == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	created.SecretKey = ""
+	writeJSON(w, created)
+}
+
+func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Name           string   `json:"name"`
+		AllowedOrigins []string `json:"allowed_origins"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	proj, err := h.Store.UpdateProject(r.Context(), id, body.Name, body.AllowedOrigins)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if proj == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, proj)
+}
+
+func (h *Handler) DeleteProject(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	paths, err := h.Store.DeleteProject(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if paths == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	for _, p := range paths {
+		if p != "" {
+			_ = os.Remove(p)
+		}
+	}
+	if h.DataDir != "" {
+		_ = os.RemoveAll(filepath.Join(h.DataDir, "events", strconv.FormatInt(id, 10)))
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) RotateProjectKey(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	created, err := h.Store.RotateProjectKey(r.Context(), id, h.PublicURL)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if created == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	created.SecretKey = ""
+	writeJSON(w, created)
+}
+
+func (h *Handler) GetEvent(w http.ResponseWriter, r *http.Request) {
+	eventID := chi.URLParam(r, "eventID")
+	ev, err := h.Store.GetEvent(r.Context(), eventID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if ev == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, ev)
 }
 
 func (h *Handler) ListFacets(w http.ResponseWriter, r *http.Request) {
@@ -300,6 +413,9 @@ func (h *Handler) CreateAlert(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "project_id, name, target required", http.StatusBadRequest)
 		return
 	}
+	if body.WindowSec <= 0 {
+		body.WindowSec = 300
+	}
 	if body.Channel == "telegram" {
 		if err := alerts.SendTelegramConnectTest(r.Context(), body.Target); err != nil {
 			http.Error(w, "telegram connect failed: "+err.Error(), http.StatusBadRequest)
@@ -313,6 +429,51 @@ func (h *Handler) CreateAlert(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusCreated)
+	writeJSON(w, rule)
+}
+
+func (h *Handler) UpdateAlert(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	var patch store.AlertRulePatch
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	if patch.Trigger != nil {
+		switch *patch.Trigger {
+		case "new_issue", "regressed_issue", "error_volume", "cron_missed":
+		default:
+			http.Error(w, "invalid trigger", http.StatusBadRequest)
+			return
+		}
+	}
+	if patch.Channel != nil {
+		switch *patch.Channel {
+		case "slack", "email", "webhook", "telegram":
+		default:
+			http.Error(w, "invalid channel", http.StatusBadRequest)
+			return
+		}
+	}
+	if patch.Channel != nil && *patch.Channel == "telegram" && patch.Target != nil {
+		if err := alerts.SendTelegramConnectTest(r.Context(), *patch.Target); err != nil {
+			http.Error(w, "telegram connect failed: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	rule, err := h.Store.UpdateAlertRule(r.Context(), id, patch)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if rule == nil {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	writeJSON(w, rule)
 }
 

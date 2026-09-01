@@ -40,6 +40,7 @@ type Span struct {
 	Description        string  `json:"description"`
 	DurationMS         float64 `json:"duration_ms"`
 	Status             string  `json:"status"`
+	StartOffsetMS      float64 `json:"start_offset_ms"`
 }
 
 type TransactionSummary struct {
@@ -113,6 +114,7 @@ func (s *Store) InsertTransaction(ctx context.Context, in InsertTransactionInput
 				Op:                 sp.Op,
 				Description:        sp.Description,
 				DurationMS:         sp.DurationMS,
+				StartOffsetMS:      sp.StartOffsetMS,
 				Status:             sp.Status,
 			}
 			if err := tx.Create(&spanRow).Error; err != nil {
@@ -240,6 +242,7 @@ func (s *Store) ListSpans(ctx context.Context, transactionEventID string) ([]Spa
 			Op:                 r.Op,
 			Description:        r.Description,
 			DurationMS:         r.DurationMS,
+			StartOffsetMS:      r.StartOffsetMS,
 			Status:             r.Status,
 		})
 	}

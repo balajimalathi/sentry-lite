@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
+import { parseAsString, useQueryStates } from 'nuqs'
 import {
   Area,
   AreaChart,
@@ -24,6 +24,7 @@ import {
   type TransactionSummary,
 } from '@/api'
 import { PageHeader } from '@/components/page-header'
+import { CreateProjectEmpty } from '@/components/page-empty'
 import { Badge } from '@/components/ui/badge'
 import {
   Card,
@@ -38,29 +39,13 @@ import {
   ChartTooltipContent,
   type ChartConfig,
 } from '@/components/ui/chart'
-import {
-  Empty,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyTitle,
-} from '@/components/ui/empty'
-import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { toTitleCase } from '@/lib/format'
-import { firstFilterValue } from '@/lib/row-filters'
+import { useProjectFilter } from '@/hooks/use-project-filter'
 
 const RANGES = ['1h', '24h', '7d', '14d'] as const
 type RangeKey = (typeof RANGES)[number]
-
-const ALL_PROJECTS = 'all'
 
 const volumeConfig = {
   events: { label: 'Events', color: 'var(--chart-2)' },
@@ -150,13 +135,11 @@ function formatCompactNumber(n: number): string {
 }
 
 export default function DashboardPage() {
+  const { projectId, setProjectId } = useProjectFilter()
   const [params, setParams] = useQueryStates({
-    project_id: parseAsArrayOf(parseAsString, ','),
     range: parseAsString.withDefault('24h'),
   })
 
-  const selectedProjectId = firstFilterValue(params.project_id)
-  const projectId = selectedProjectId || ''
   const range = (RANGES.includes(params.range as RangeKey)
     ? params.range
     : '24h') as RangeKey
@@ -203,14 +186,6 @@ export default function DashboardPage() {
     cronsQuery.isLoading ||
     (projectId ? transactionsQuery.isLoading || releasesQuery.isLoading : false)
 
-  const projectItems = useMemo(
-    () => [
-      { label: 'All projects', value: ALL_PROJECTS },
-      ...projects.map((p) => ({ label: p.name, value: String(p.id) })),
-    ],
-    [projects]
-  )
-
   const statusData = useMemo(() => {
     const by = stats?.by_status ?? {}
     return Object.entries(by).map(([name, value]) => ({
@@ -242,14 +217,6 @@ export default function DashboardPage() {
   const crons = cronsQuery.data ?? []
   const releases = (releasesQuery.data ?? []).slice(0, 5)
 
-  function setProject(value: string | null) {
-    if (value == null || value === ALL_PROJECTS) {
-      void setParams({ project_id: null })
-      return
-    }
-    void setParams({ project_id: [value] })
-  }
-
   function setRange(next: string[]) {
     const value = next[0]
     if (value && RANGES.includes(value as RangeKey)) {
@@ -264,21 +231,7 @@ export default function DashboardPage() {
           title="Dashboard"
           description="Overview of errors, performance, and monitors."
         />
-        <Empty className="border border-dashed">
-          <EmptyHeader>
-            <EmptyTitle>No projects yet</EmptyTitle>
-            <EmptyDescription>
-              Create a project to start ingesting events, then return here for
-              an overview.
-            </EmptyDescription>
-          </EmptyHeader>
-          <Link
-            to="/projects"
-            className="text-sm font-medium text-foreground underline-offset-4 hover:underline"
-          >
-            Go to Projects
-          </Link>
-        </Empty>
+        <CreateProjectEmpty />
       </section>
     )
   }
@@ -289,39 +242,19 @@ export default function DashboardPage() {
         title="Dashboard"
         description="Overview of errors, performance, and monitors."
         actions={
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Select
-              items={projectItems}
-              value={projectId || ALL_PROJECTS}
-              onValueChange={setProject}
-            >
-              <SelectTrigger size="sm" className="min-w-40">
-                <SelectValue placeholder="All projects" />
-              </SelectTrigger>
-              <SelectContent align="end">
-                <SelectGroup>
-                  {projectItems.map((item) => (
-                    <SelectItem key={item.value} value={item.value}>
-                      {item.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-            <ToggleGroup
-              value={[range]}
-              onValueChange={setRange}
-              variant="outline"
-              size="sm"
-              spacing={0}
-            >
-              {RANGES.map((r) => (
-                <ToggleGroupItem key={r} value={r} aria-label={r}>
-                  {r}
-                </ToggleGroupItem>
-              ))}
-            </ToggleGroup>
-          </div>
+          <ToggleGroup
+            value={[range]}
+            onValueChange={setRange}
+            variant="outline"
+            size="sm"
+            spacing={0}
+          >
+            {RANGES.map((r) => (
+              <ToggleGroupItem key={r} value={r} aria-label={r}>
+                {r}
+              </ToggleGroupItem>
+            ))}
+          </ToggleGroup>
         }
       />
 
@@ -650,7 +583,7 @@ export default function DashboardPage() {
                         <button
                           type="button"
                           className="flex w-full items-center justify-between gap-3 rounded-md px-1 py-1.5 text-left text-sm hover:bg-muted"
-                          onClick={() => setProject(String(p.id))}
+                          onClick={() => setProjectId(String(p.id))}
                         >
                           <span className="min-w-0 truncate font-medium">
                             {p.name}

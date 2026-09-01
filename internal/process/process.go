@@ -212,7 +212,7 @@ func (w *Worker) handleError(ctx context.Context, msg ingest.IngestMessage, rawP
 		}
 	}
 
-	if w.Alerts != nil && result != nil {
+	if w.Alerts != nil && result != nil && !result.Ignored {
 		base := alerts.Event{
 			ProjectID: msg.ProjectID,
 			IssueID:   result.IssueID,
@@ -429,17 +429,22 @@ func NormalizeTransaction(payload []byte) (*NormalizedTransaction, error) {
 			if !spStart.IsZero() && !spEnd.IsZero() && spEnd.After(spStart) {
 				dur = float64(spEnd.Sub(spStart).Microseconds()) / 1000.0
 			}
+			offset := 0.0
+			if !start.IsZero() && !spStart.IsZero() && !spStart.Before(start) {
+				offset = float64(spStart.Sub(start).Microseconds()) / 1000.0
+			}
 			desc := asString(sm["description"])
 			if desc == "" {
 				desc = asString(sm["op"])
 			}
 			n.Spans = append(n.Spans, store.Span{
-				SpanID:       asString(sm["span_id"]),
-				ParentSpanID: asString(sm["parent_span_id"]),
-				Op:           asString(sm["op"]),
-				Description:  desc,
-				DurationMS:   dur,
-				Status:       asString(sm["status"]),
+				SpanID:        asString(sm["span_id"]),
+				ParentSpanID:  asString(sm["parent_span_id"]),
+				Op:            asString(sm["op"]),
+				Description:   desc,
+				DurationMS:    dur,
+				StartOffsetMS: offset,
+				Status:        asString(sm["status"]),
 			})
 		}
 	}

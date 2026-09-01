@@ -35,6 +35,16 @@ func main() {
 	}
 	defer st.Close()
 
+	if cfg.RequireAdminToken && cfg.AdminToken == "" {
+		log.Fatal("ADMIN_TOKEN is required in Docker and production; set it in .env")
+	}
+
+	if seeded, err := st.SeedDemoProject(context.Background(), cfg.PublicURL); err != nil {
+		log.Fatalf("seed demo project: %v", err)
+	} else if seeded != nil {
+		log.Printf("seeded demo project DSN: %s", seeded.DSN)
+	}
+
 	b, err := bus.New(cfg.RedpandaBrokers, cfg.IngestTopic)
 	if err != nil {
 		log.Fatalf("bus: %v", err)
@@ -45,10 +55,12 @@ func main() {
 	defer cancel()
 
 	alertDisp := &alerts.Dispatcher{
-		Store:   st,
-		APIBase: cfg.PublicURL,
-		SMTP:    cfg.AlertSMTP,
-		From:    cfg.AlertFrom,
+		Store:    st,
+		APIBase:  cfg.PublicURL,
+		SMTP:     cfg.AlertSMTP,
+		SMTPUser: cfg.AlertSMTPUser,
+		SMTPPass: cfg.AlertSMTPPass,
+		From:     cfg.AlertFrom,
 	}
 
 	worker := &process.Worker{
@@ -65,6 +77,9 @@ func main() {
 	cronWatch := &process.CronWatcher{Store: st, Alerts: alertDisp}
 	go cronWatch.Run(ctx)
 
+	retention := &process.RetentionWorker{Store: st, Days: cfg.EventRetentionDays}
+	go retention.Run(ctx)
+
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(middleware.RealIP)
@@ -77,10 +92,10 @@ func main() {
 		_, _ = w.Write([]byte("ok"))
 	})
 
-	ingestHandler := &ingest.Handler{Store: st, Bus: b}
+	ingestHandler := &ingest.Handler{Store: st, Bus: b, IngestRPS: cfg.IngestRPS}
 	ingestHandler.Routes(r)
 
-	apiHandler := &api.Handler{Store: st, PublicURL: cfg.PublicURL, AdminToken: cfg.AdminToken}
+	apiHandler := &api.Handler{Store: st, PublicURL: cfg.PublicURL, AdminToken: cfg.AdminToken, DataDir: cfg.DataDir}
 	apiHandler.Routes(r)
 
 	serveSPA(r, cfg.WebDist)

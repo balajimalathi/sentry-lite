@@ -11,6 +11,13 @@ services:
       REDPANDA_BROKERS: redpanda:9092
       WEB_DIST: /app/web/dist
       ADMIN_TOKEN: ${ADMIN_TOKEN:?set ADMIN_TOKEN}
+      PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+      INGEST_RPS: ${INGEST_RPS:-100}
+      EVENT_RETENTION_DAYS: ${EVENT_RETENTION_DAYS:-14}
+      ALERT_SMTP: ${ALERT_SMTP:-}
+      ALERT_SMTP_USER: ${ALERT_SMTP_USER:-}
+      ALERT_SMTP_PASS: ${ALERT_SMTP_PASS:-}
+      ALERT_FROM: ${ALERT_FROM:-sentry-lite@localhost}
     volumes:
       - app_data:/data
     networks:

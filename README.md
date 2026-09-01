@@ -1,6 +1,3 @@
-
-
-
 # sentry-lite
 
 [Status](https://github.com/balajimalathi/sentry-lite)
@@ -13,11 +10,11 @@
 
 ## Demo
 
-https://github.com/user-attachments/assets/ccf28ae9-fba0-4d52-b418-8d83c45f4546
+[https://github.com/user-attachments/assets/ccf28ae9-fba0-4d52-b418-8d83c45f4546](https://github.com/user-attachments/assets/ccf28ae9-fba0-4d52-b418-8d83c45f4546)
 
 ## Stress Testing
 
-https://github.com/user-attachments/assets/421ef18d-9b75-4632-8188-c905e1420fd8
+[https://github.com/user-attachments/assets/421ef18d-9b75-4632-8188-c905e1420fd8](https://github.com/user-attachments/assets/421ef18d-9b75-4632-8188-c905e1420fd8)
 
 TUI resource stats while the API, web UI, and Redpanda are running:
 
@@ -55,6 +52,8 @@ flowchart LR
   processor --> SQLite
   API -->|serves| UI["UI + /api/internal/*"]
 ```
+
+
 
 
 
@@ -177,7 +176,6 @@ Channel `telegram` stores `botToken|chatId`. Message your bot once (to learn the
 
 | Path                                     | Purpose                               |
 | ---------------------------------------- | ------------------------------------- |
-| `[examples/node-sdk](examples/node-sdk)` | Bun smoke test (errors + performance) |
 | `[examples/nextjs](examples/nextjs)`     | Next.js playground (`@sentry/nextjs`) |
 | `[docs/load-test.md](docs/load-test.md)` | Headless 1M-event load test           |
 | `go run ./cmd/sentry-lite-load`          | Interactive load-test TUI             |
@@ -185,11 +183,8 @@ Channel `telegram` stores `botToken|chatId`. Message your bot once (to learn the
 
 
 ```bash
-# errors
-cd examples/node-sdk && bun install && bun run send.ts
-
-# performance
-bun run send-perf.ts
+# playground (errors, performance, crons, releases)
+cd examples/nextjs && bun install && bun run dev
 
 # cron check-in (create monitor in UI first)
 curl -X POST http://localhost:8080/api/cron/check-in/<token>
@@ -209,15 +204,21 @@ go run ./cmd/sentry-lite-release -version=1.2.3 [-project=1] [-token="$ADMIN_TOK
 
 | Endpoint                                          | Purpose                                                                              |
 | ------------------------------------------------- | ------------------------------------------------------------------------------------ |
-| `POST /api/{project_id}/envelope/`                | Sentry envelope ingest (events + transactions)                                       |
+| `POST /api/{project_id}/envelope/`                | Sentry envelope ingest (gzip supported)                                              |
 | `POST /api/{project_id}/store/`                   | Legacy JSON store                                                                    |
 | `POST /api/cron/check-in/{token}`                 | Cron heartbeat check-in                                                              |
 | `GET /api/internal/projects`                      | Project list                                                                         |
 | `POST /api/internal/projects`                     | Create project `{ name, slug? }` → project + DSN                                     |
+| `GET /api/internal/projects/{id}`                 | Project + current DSN                                                                |
+| `PATCH /api/internal/projects/{id}`               | Update name / allowed origins                                                        |
+| `DELETE /api/internal/projects/{id}`              | Delete project and stored events                                                     |
+| `POST /api/internal/projects/{id}/rotate-key`     | Issue a new DSN (invalidates the old key)                                            |
 | `GET /api/internal/facets`                        | Distinct env/release/tag values                                                      |
 | `GET /api/internal/issues`                        | Issue list (filters: `project_id`, `environment`, `release`, `q`, tags, `from`/`to`) |
 | `GET /api/internal/issues/{id}`                   | Issue + latest event                                                                 |
-| `PATCH /api/internal/issues/{id}`                 | `{ "status": "open|resolved|ignored", "assignee": "..." }`                           |
+| `GET /api/internal/issues/{id}/events`            | Event timeline                                                                       |
+| `GET /api/internal/events/{event_id}`             | Single event (payload, tags, request)                                                |
+| `PATCH /api/internal/issues/{id}`                 | `{ "status": "open\|resolved\|ignored" }` or `{ "assignee": "..." }`                 |
 | `GET /api/internal/transactions?project_id=`      | Transaction list with p95/p99 (24h)                                                  |
 | `GET /api/internal/transaction?project_id=&name=` | Samples + spans                                                                      |
 | `GET /api/internal/traces/{trace_id}`             | Trace detail + related error issues                                                  |
@@ -226,6 +227,7 @@ go run ./cmd/sentry-lite-release -version=1.2.3 [-project=1] [-token="$ADMIN_TOK
 | `PATCH` / `DELETE /api/internal/crons/{id}`       | Update / delete monitor                                                              |
 | `GET` / `POST /api/internal/releases`             | List / register releases                                                             |
 | `GET` / `POST /api/internal/alerts`               | Alert rules (`slack` / `email` / `webhook` / `telegram`)                             |
+| `PATCH /api/internal/alerts/{id}`                 | Edit rule, enable/disable, secret, window                                            |
 | `GET /healthz`                                    | Health check                                                                         |
 
 
@@ -234,20 +236,25 @@ go run ./cmd/sentry-lite-release -version=1.2.3 [-project=1] [-token="$ADMIN_TOK
 ## Configuration
 
 
-| Var                 | Default                                                  |
-| ------------------- | -------------------------------------------------------- |
-| `HTTP_ADDR`         | `:8080`                                                  |
-| `SQLITE_PATH`       | `./data/sentry-lite.db`                                  |
-| `DATA_DIR`          | `./data`                                                 |
-| `REDPANDA_BROKERS`  | `localhost:19092` (Compose: `redpanda:9092`)             |
-| `INGEST_TOPIC`      | `events.ingest`                                          |
-| `WEB_DIST`          | `./web/dist`                                             |
-| `PUBLIC_URL`        | `http://localhost:8080` (issue links in alerts)          |
-| `ADMIN_TOKEN`       | *(empty = management API open; set for any real deploy)* |
-| `HTTP_PORT`         | `8080` (Compose host bind only)                          |
-| `SENTRY_LITE_TOKEN` | *(release CLI; same as* `ADMIN_TOKEN`*)*                 |
-| `ALERT_SMTP`        | *(empty = email alerts off)*                             |
-| `ALERT_FROM`        | `sentry-lite@localhost`                                  |
+| Var                     | Default                                                  |
+| ----------------------- | -------------------------------------------------------- |
+| `HTTP_ADDR`             | `:8080`                                                  |
+| `SQLITE_PATH`           | `./data/sentry-lite.db`                                  |
+| `DATA_DIR`              | `./data`                                                 |
+| `REDPANDA_BROKERS`      | `localhost:19092` (Compose: `redpanda:9092`)             |
+| `INGEST_TOPIC`          | `events.ingest`                                          |
+| `WEB_DIST`              | `./web/dist`                                             |
+| `PUBLIC_URL`            | `http://localhost:8080` (issue links in alerts)          |
+| `ADMIN_TOKEN`           | *(empty = management API open; set for any real deploy)* |
+| `REQUIRE_ADMIN_TOKEN`   | auto-on in Docker; refuse start if `ADMIN_TOKEN` empty   |
+| `HTTP_PORT`             | `8080` (Compose host bind only)                          |
+| `SENTRY_LITE_TOKEN`     | *(release CLI; same as* `ADMIN_TOKEN`*)*                 |
+| `INGEST_RPS`            | `0` unlimited locally; Compose defaults to `100`         |
+| `EVENT_RETENTION_DAYS`  | `14` (`0` disables purge of `data/events/`)              |
+| `ALERT_SMTP`            | *(empty = email alerts off)*                             |
+| `ALERT_SMTP_USER`       | *(optional SMTP auth)*                                   |
+| `ALERT_SMTP_PASS`       | *(optional SMTP auth)*                                   |
+| `ALERT_FROM`            | `sentry-lite@localhost`                                  |
 
 
 Browser SDK CORS is per project (`allowed_origins`). Empty list = any Origin. The seeded demo project allows `http://localhost:5173`, `:3000`, and `:8080`.
@@ -257,7 +264,9 @@ Browser SDK CORS is per project (`allowed_origins`). Empty list = any Origin. Th
 Management UI and `/api/internal/*` are protected by `ADMIN_TOKEN` when set. Ingest (DSN public key) and cron check-ins (URL token) stay separate.
 
 - **Local / TUI:** put `ADMIN_TOKEN` in `.env` so the Vite UI shows gateway-token login.
-- **Any non-local deploy:** use a long random `ADMIN_TOKEN`. UI stores it in `sessionStorage` (1h idle expiry).
+- **Any non-local deploy:** use a long random `ADMIN_TOKEN`. UI stores it in `sessionStorage` (1h idle expiry). Docker refuses to start if it is empty.
+- **Ignored issues** stay ignored (no regression reopen). Counts still increment; alerts are skipped.
+- **Webhook HMAC:** set a per-rule secret in Alerts. Payloads are signed; do not reuse a shared default.
 
 
 
@@ -289,6 +298,8 @@ server {
 To report a vulnerability, see [SECURITY.md](SECURITY.md).
 
 ## Troubleshooting
+
+
 
 ### Ghost issues / load-test leftovers
 

@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"gorm.io/gorm"
@@ -22,17 +24,19 @@ type Release struct {
 }
 
 type AlertRule struct {
-	ID        int64  `json:"id"`
-	ProjectID int64  `json:"project_id"`
-	Name      string `json:"name"`
-	Trigger   string `json:"trigger"`
-	Channel   string `json:"channel"`
-	Target    string `json:"target"`
-	Threshold int64  `json:"threshold"`
-	WindowSec int64  `json:"window_sec"`
-	Enabled   bool   `json:"enabled"`
-	Secret    string `json:"secret,omitempty"`
-	CreatedAt string `json:"created_at"`
+	ID                 int64   `json:"id"`
+	ProjectID          int64   `json:"project_id"`
+	Name               string  `json:"name"`
+	Trigger            string  `json:"trigger"`
+	Channel            string  `json:"channel"`
+	Target             string  `json:"target"`
+	Threshold          int64   `json:"threshold"`
+	WindowSec          int64   `json:"window_sec"`
+	Enabled            bool    `json:"enabled"`
+	Secret             string  `json:"secret,omitempty"`
+	CreatedAt          string  `json:"created_at"`
+	LastDeliveredAt    *string `json:"last_delivered_at,omitempty"`
+	LastDeliveryStatus *string `json:"last_delivery_status,omitempty"`
 }
 
 func (s *Store) UpsertRelease(ctx context.Context, projectID int64, version, ref, url string) (*Release, error) {
@@ -177,7 +181,43 @@ func (s *Store) ListAlertRules(ctx context.Context, projectID int64) ([]AlertRul
 	for i := range rows {
 		out = append(out, *alertRuleFromRow(&rows[i]))
 	}
+	if err := s.attachAlertDeliveries(ctx, out); err != nil {
+		return nil, err
+	}
 	return out, nil
+}
+
+func (s *Store) attachAlertDeliveries(ctx context.Context, rules []AlertRule) error {
+	if len(rules) == 0 {
+		return nil
+	}
+	type lastDel struct {
+		RuleID    int64
+		Status    string
+		CreatedAt string
+	}
+	var rows []lastDel
+	err := s.DB.WithContext(ctx).Raw(`
+		SELECT rule_id, status, created_at
+		FROM alert_deliveries
+		WHERE id IN (SELECT MAX(id) FROM alert_deliveries GROUP BY rule_id)
+	`).Scan(&rows).Error
+	if err != nil {
+		return err
+	}
+	byRule := map[int64]lastDel{}
+	for _, r := range rows {
+		byRule[r.RuleID] = r
+	}
+	for i := range rules {
+		if d, ok := byRule[rules[i].ID]; ok {
+			status := d.Status
+			at := d.CreatedAt
+			rules[i].LastDeliveryStatus = &status
+			rules[i].LastDeliveredAt = &at
+		}
+	}
+	return nil
 }
 
 func (s *Store) ListEnabledAlertRules(ctx context.Context, projectID int64, trigger string) ([]AlertRule, error) {
@@ -222,6 +262,77 @@ func (s *Store) DeleteAlertRule(ctx context.Context, id int64) error {
 		}
 		return tx.Delete(&AlertRuleRow{}, id).Error
 	})
+}
+
+type AlertRulePatch struct {
+	Name      *string `json:"name"`
+	Trigger   *string `json:"trigger"`
+	Channel   *string `json:"channel"`
+	Target    *string `json:"target"`
+	Threshold *int64  `json:"threshold"`
+	WindowSec *int64  `json:"window_sec"`
+	Enabled   *bool   `json:"enabled"`
+	Secret    *string `json:"secret"`
+}
+
+func (s *Store) UpdateAlertRule(ctx context.Context, id int64, patch AlertRulePatch) (*AlertRule, error) {
+	existing, err := s.GetAlertRule(ctx, id)
+	if err != nil || existing == nil {
+		return existing, err
+	}
+	updates := map[string]any{}
+	if patch.Name != nil && strings.TrimSpace(*patch.Name) != "" {
+		updates["name"] = strings.TrimSpace(*patch.Name)
+	}
+	if patch.Trigger != nil && *patch.Trigger != "" {
+		updates["trigger"] = *patch.Trigger
+	}
+	if patch.Channel != nil && *patch.Channel != "" {
+		updates["channel"] = *patch.Channel
+	}
+	if patch.Target != nil && strings.TrimSpace(*patch.Target) != "" {
+		updates["target"] = strings.TrimSpace(*patch.Target)
+	}
+	if patch.Threshold != nil {
+		updates["threshold"] = *patch.Threshold
+	}
+	if patch.WindowSec != nil && *patch.WindowSec > 0 {
+		updates["window_sec"] = *patch.WindowSec
+	}
+	if patch.Enabled != nil {
+		en := 0
+		if *patch.Enabled {
+			en = 1
+		}
+		updates["enabled"] = en
+	}
+	if patch.Secret != nil {
+		updates["secret"] = strPtrOrNil(*patch.Secret)
+	}
+	if len(updates) == 0 {
+		return existing, nil
+	}
+	if err := s.DB.WithContext(ctx).Model(&AlertRuleRow{}).Where("id = ?", id).Updates(updates).Error; err != nil {
+		return nil, err
+	}
+	return s.GetAlertRule(ctx, id)
+}
+
+func (s *Store) HasRecentDelivery(ctx context.Context, ruleID, issueID int64, within time.Duration) (bool, error) {
+	sec := int(within.Seconds())
+	if sec < 1 {
+		sec = 1
+	}
+	q := s.DB.WithContext(ctx).Model(&AlertDeliveryRow{}).
+		Where("rule_id = ? AND status = ? AND created_at >= datetime('now', ?)", ruleID, "ok", fmt.Sprintf("-%d seconds", sec))
+	if issueID > 0 {
+		q = q.Where("issue_id = ?", issueID)
+	}
+	var n int64
+	if err := q.Count(&n).Error; err != nil {
+		return false, err
+	}
+	return n > 0, nil
 }
 
 func alertRuleFromRow(row *AlertRuleRow) *AlertRule {

@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
 import { AlertCircleIcon } from 'lucide-react'
-import { api, formatRelativeTime, formatTime, type TraceDetail } from '@/api'
+import { api, formatRelativeTime, formatTime } from '@/api'
+import { PageEmpty } from '@/components/page-empty'
+import { TraceWaterfall } from '@/components/trace-waterfall'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
   Breadcrumb,
@@ -11,6 +13,7 @@ import {
   BreadcrumbPage,
   BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb'
+import { Skeleton } from '@/components/ui/skeleton'
 import {
   Table,
   TableBody,
@@ -28,26 +31,23 @@ function fmtMs(n: number) {
 
 export default function TracePage() {
   const { traceId = '' } = useParams()
-  const [detail, setDetail] = useState<TraceDetail | null>(null)
-  const [error, setError] = useState('')
+  const query = useQuery({
+    queryKey: ['trace', traceId],
+    queryFn: () => api.trace(traceId),
+    enabled: Boolean(traceId),
+  })
 
-  useEffect(() => {
-    if (!traceId) return
-    api
-      .trace(traceId)
-      .then(setDetail)
-      .catch((e) => setError(String(e)))
-  }, [traceId])
-
-  if (error) {
+  if (query.error) {
     return (
       <Alert variant="destructive">
         <AlertCircleIcon />
         <AlertTitle>Failed to load trace</AlertTitle>
-        <AlertDescription>{error}</AlertDescription>
+        <AlertDescription>{String(query.error)}</AlertDescription>
       </Alert>
     )
   }
+
+  const detail = query.data
 
   return (
     <section className="flex flex-col gap-6">
@@ -72,65 +72,77 @@ export default function TracePage() {
         <p className="mt-1 font-mono text-sm text-muted-foreground">{traceId}</p>
       </div>
 
-      {detail && detail.issues.length > 0 && (
-        <div className="flex flex-col gap-2">
-          <h2 className="text-lg font-medium">Related issues</h2>
-          <ul className="list-inside list-disc text-sm">
-            {detail.issues.map((i) => (
-              <li key={i.issue_id}>
-                <Link
-                  to={`/issues/${i.issue_id}`}
-                  className="underline-offset-4 hover:underline"
-                >
-                  #{i.issue_id} {i.title}
-                </Link>
-              </li>
-            ))}
-          </ul>
+      {query.isLoading ? (
+        <div className="flex flex-col gap-3">
+          <Skeleton className="h-8 w-1/2" />
+          <Skeleton className="h-48 w-full" />
         </div>
-      )}
+      ) : !detail || detail.transactions.length === 0 ? (
+        <PageEmpty
+          title="No spans in this trace"
+          description="This trace id has no stored transactions yet."
+        />
+      ) : (
+        <>
+          {detail.issues.length > 0 && (
+            <div className="flex flex-col gap-2">
+              <h2 className="text-lg font-medium">Related issues</h2>
+              <ul className="list-inside list-disc text-sm">
+                {detail.issues.map((i) => (
+                  <li key={i.issue_id}>
+                    <Link
+                      to={`/issues/${i.issue_id}`}
+                      className="underline-offset-4 hover:underline"
+                    >
+                      #{i.issue_id} {i.title}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
-      <div className="flex flex-col gap-4">
-        <h2 className="text-lg font-medium">Transactions</h2>
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>Name</TableHead>
-              <TableHead>Duration</TableHead>
-              <TableHead>Status</TableHead>
-              <TableHead>Time</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {(detail?.transactions ?? []).map((t) => (
-              <TableRow key={t.event_id}>
-                <TableCell>
-                  <Link
-                    to={`/performance/${encodeURIComponent(t.name)}?project_id=${t.project_id}`}
-                    className="font-mono text-sm underline-offset-4 hover:underline"
-                  >
-                    {t.name}
-                  </Link>
-                </TableCell>
-                <TableCell>{fmtMs(t.duration_ms)}</TableCell>
-                <TableCell>{t.status || '—'}</TableCell>
-                <TableCell className="text-muted-foreground">
-                  <span title={formatTime(t.timestamp)}>
-                    {formatRelativeTime(t.timestamp)}
-                  </span>
-                </TableCell>
-              </TableRow>
-            ))}
-            {(detail?.transactions?.length ?? 0) === 0 && (
-              <TableRow>
-                <TableCell colSpan={4} className="text-muted-foreground">
-                  No transactions for this trace.
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-        </Table>
-      </div>
+          <div className="flex flex-col gap-3">
+            <h2 className="text-lg font-medium">Waterfall</h2>
+            <TraceWaterfall transactions={detail.transactions} />
+          </div>
+
+          <div className="flex flex-col gap-4">
+            <h2 className="text-lg font-medium">Transactions</h2>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Name</TableHead>
+                  <TableHead>Duration</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Time</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {detail.transactions.map((t) => (
+                  <TableRow key={t.event_id}>
+                    <TableCell>
+                      <Link
+                        to={`/performance/${encodeURIComponent(t.name)}?project_id=${t.project_id}`}
+                        className="font-mono text-sm underline-offset-4 hover:underline"
+                      >
+                        {t.name}
+                      </Link>
+                    </TableCell>
+                    <TableCell>{fmtMs(t.duration_ms)}</TableCell>
+                    <TableCell>{t.status || '—'}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      <span title={formatTime(t.timestamp)}>
+                        {formatRelativeTime(t.timestamp)}
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </>
+      )}
     </section>
   )
 }
