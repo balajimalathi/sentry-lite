@@ -12,12 +12,14 @@ type Organization struct {
 func (Organization) TableName() string { return "organizations" }
 
 type ProjectRow struct {
-	ID             int64  `gorm:"column:id;primaryKey;autoIncrement"`
-	OrganizationID int64  `gorm:"column:organization_id;not null;uniqueIndex:ux_projects_org_slug"`
-	Slug           string `gorm:"column:slug;not null;uniqueIndex:ux_projects_org_slug"`
-	Name           string `gorm:"column:name;not null"`
-	AllowedOrigins string `gorm:"column:allowed_origins;not null;default:'[]'"`
-	CreatedAt      string `gorm:"column:created_at;not null;default:(datetime('now'))"`
+	ID               int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	OrganizationID   int64  `gorm:"column:organization_id;not null;uniqueIndex:ux_projects_org_slug"`
+	Slug             string `gorm:"column:slug;not null;uniqueIndex:ux_projects_org_slug"`
+	Name             string `gorm:"column:name;not null"`
+	AllowedOrigins   string `gorm:"column:allowed_origins;not null;default:'[]'"`
+	GroupingConfig   string `gorm:"column:grouping_config;not null;default:'sentry-lite:v1'"`
+	FingerprintRules string `gorm:"column:fingerprint_rules;not null;default:''"`
+	CreatedAt        string `gorm:"column:created_at;not null;default:(datetime('now'))"`
 }
 
 func (ProjectRow) TableName() string { return "projects" }
@@ -48,31 +50,44 @@ type IssueRow struct {
 	Regressed    int     `gorm:"column:regressed;not null;default:0"`
 	ResolvedAt   *string `gorm:"column:resolved_at"`
 	Assignee     *string `gorm:"column:assignee"`
+	MergedInto   *int64  `gorm:"column:merged_into;index"`
 }
 
 func (IssueRow) TableName() string { return "issues" }
 
 type EventRow struct {
-	ID            int64   `gorm:"column:id;primaryKey;autoIncrement"`
-	EventID       string  `gorm:"column:event_id;uniqueIndex;not null"`
-	IssueID       int64   `gorm:"column:issue_id;not null;index:idx_events_issue_ts"`
-	ProjectID     int64   `gorm:"column:project_id;not null;index:idx_events_project_ts"`
-	Timestamp     string  `gorm:"column:timestamp;not null;index:idx_events_issue_ts,sort:desc;index:idx_events_project_ts,sort:desc"`
-	Environment   *string `gorm:"column:environment"`
-	Release       *string `gorm:"column:release"`
-	Platform      *string `gorm:"column:platform"`
-	Message       *string `gorm:"column:message"`
-	ExceptionType *string `gorm:"column:exception_type"`
-	Culprit       *string `gorm:"column:culprit"`
-	UserID        *string `gorm:"column:user_id"`
-	UserEmail     *string `gorm:"column:user_email"`
-	TraceID       *string `gorm:"column:trace_id;index:idx_events_trace"`
-	RawPath       string  `gorm:"column:raw_path;not null"`
-	PayloadJSON   string  `gorm:"column:payload_json;not null;default:'{}'"`
-	CreatedAt     string  `gorm:"column:created_at;not null;default:(datetime('now'))"`
+	ID              int64   `gorm:"column:id;primaryKey;autoIncrement"`
+	EventID         string  `gorm:"column:event_id;uniqueIndex;not null"`
+	IssueID         int64   `gorm:"column:issue_id;not null;index:idx_events_issue_ts;index:idx_events_issue_grouping"`
+	ProjectID       int64   `gorm:"column:project_id;not null;index:idx_events_project_ts"`
+	Timestamp       string  `gorm:"column:timestamp;not null;index:idx_events_issue_ts,sort:desc;index:idx_events_project_ts,sort:desc"`
+	Environment     *string `gorm:"column:environment"`
+	Release         *string `gorm:"column:release"`
+	Platform        *string `gorm:"column:platform"`
+	Message         *string `gorm:"column:message"`
+	ExceptionType   *string `gorm:"column:exception_type"`
+	Culprit         *string `gorm:"column:culprit"`
+	UserID          *string `gorm:"column:user_id"`
+	UserEmail       *string `gorm:"column:user_email"`
+	TraceID         *string `gorm:"column:trace_id;index:idx_events_trace"`
+	GroupingHash    *string `gorm:"column:grouping_hash;index:idx_events_issue_grouping"`
+	GroupingVariant *string `gorm:"column:grouping_variant"`
+	RawPath         string  `gorm:"column:raw_path;not null"`
+	PayloadJSON     string  `gorm:"column:payload_json;not null;default:'{}'"`
+	CreatedAt       string  `gorm:"column:created_at;not null;default:(datetime('now'))"`
 }
 
 func (EventRow) TableName() string { return "events" }
+
+type IssueHashRow struct {
+	ID        int64  `gorm:"column:id;primaryKey;autoIncrement"`
+	ProjectID int64  `gorm:"column:project_id;not null;uniqueIndex:ux_issue_hashes_project_hash;index:idx_issue_hashes_issue"`
+	Hash      string `gorm:"column:hash;not null;uniqueIndex:ux_issue_hashes_project_hash"`
+	IssueID   int64  `gorm:"column:issue_id;not null;index:idx_issue_hashes_issue"`
+	Variant   string `gorm:"column:variant;not null;default:''"`
+}
+
+func (IssueHashRow) TableName() string { return "issue_hashes" }
 
 type EventTagRow struct {
 	ID        int64  `gorm:"column:id;primaryKey;autoIncrement"`
@@ -206,6 +221,7 @@ func allModels() []any {
 		&ProjectRow{},
 		&ProjectKeyRow{},
 		&IssueRow{},
+		&IssueHashRow{},
 		&EventRow{},
 		&EventTagRow{},
 		&ReleaseRow{},

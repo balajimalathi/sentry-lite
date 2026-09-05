@@ -43,6 +43,14 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
 import { useDataTable } from '@/hooks/use-data-table'
 
@@ -55,6 +63,11 @@ function slugify(name: string) {
     .replace(/^-+|-+$/g, '')
     .slice(0, 48)
 }
+
+const GROUPING_CONFIGS = [
+  { value: 'sentry-lite:v1', label: 'Legacy (v1)' },
+  { value: 'sentry-lite:2026-09-01', label: 'Stacktrace variants (2026-09-01)' },
+] as const
 
 function parseOrigins(text: string) {
   return text
@@ -75,6 +88,9 @@ export default function ProjectsPage() {
   const [editTarget, setEditTarget] = useState<Project | null>(null)
   const [editName, setEditName] = useState('')
   const [editOrigins, setEditOrigins] = useState('')
+  const [groupingTarget, setGroupingTarget] = useState<Project | null>(null)
+  const [groupingConfig, setGroupingConfig] = useState('sentry-lite:v1')
+  const [fingerprintRules, setFingerprintRules] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<Project | null>(null)
   const [rotateTarget, setRotateTarget] = useState<Project | null>(null)
 
@@ -126,6 +142,22 @@ export default function ProjectsPage() {
     },
   })
 
+  const groupingMutation = useMutation({
+    mutationFn: () => {
+      if (!groupingTarget) throw new Error('No project selected')
+      return api.updateProject(groupingTarget.id, {
+        grouping_config: groupingConfig,
+        fingerprint_rules: fingerprintRules,
+      })
+    },
+    onSuccess: () => {
+      setGroupingTarget(null)
+      setFormError('')
+      void qc.invalidateQueries({ queryKey: ['projects'] })
+    },
+    onError: (e) => setFormError(String(e)),
+  })
+
   const rotateMutation = useMutation({
     mutationFn: (id: number) => api.rotateProjectKey(id),
     onSuccess: (res) => {
@@ -152,6 +184,18 @@ export default function ProjectsPage() {
     setEditName(project.name)
     setEditOrigins((project.allowed_origins ?? []).join('\n'))
     setEditTarget(project)
+  }
+
+  function openGrouping(project: Project) {
+    setFormError('')
+    setGroupingConfig(project.grouping_config || 'sentry-lite:v1')
+    setFingerprintRules(project.fingerprint_rules ?? '')
+    setGroupingTarget(project)
+  }
+
+  function onGrouping(e: FormEvent) {
+    e.preventDefault()
+    groupingMutation.mutate()
   }
 
   const columns = useMemo<ColumnDef<Project>[]>(
@@ -237,6 +281,7 @@ export default function ProjectsPage() {
               }
             }}
             onEdit={openEdit}
+            onGrouping={openGrouping}
             onRotate={setRotateTarget}
             onDelete={setDeleteTarget}
           />
@@ -422,6 +467,87 @@ export default function ProjectsPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={groupingTarget != null}
+        onOpenChange={(next) => {
+          if (!next) setGroupingTarget(null)
+        }}
+      >
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Issue grouping</DialogTitle>
+            <DialogDescription>
+              Changes apply to future events only. Existing issues are not
+              regrouped.
+            </DialogDescription>
+          </DialogHeader>
+          <form onSubmit={onGrouping} className="flex flex-col gap-4">
+            <FieldGroup>
+              <Field>
+                <FieldLabel>Grouping config</FieldLabel>
+                <Select
+                  items={GROUPING_CONFIGS.map((c) => ({
+                    label: c.label,
+                    value: c.value,
+                  }))}
+                  value={groupingConfig}
+                  onValueChange={(v) => {
+                    if (typeof v === 'string') setGroupingConfig(v)
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectGroup>
+                      {GROUPING_CONFIGS.map((item) => (
+                        <SelectItem key={item.value} value={item.value}>
+                          {item.label}
+                        </SelectItem>
+                      ))}
+                    </SelectGroup>
+                  </SelectContent>
+                </Select>
+                <FieldDescription>
+                  Legacy hashes exception, top in-app frame, and message.
+                  Stacktrace variants group by in-app frames first.
+                </FieldDescription>
+              </Field>
+              <Field>
+                <FieldLabel htmlFor="fingerprint-rules">
+                  Fingerprint rules
+                </FieldLabel>
+                <Textarea
+                  id="fingerprint-rules"
+                  className="min-h-40 font-mono text-xs"
+                  value={fingerprintRules}
+                  onChange={(e) => setFingerprintRules(e.target.value)}
+                  placeholder={
+                    'error.type:TimeoutError -> timeout\nmessage:"connection refused*" -> conn-refused, {{ default }}'
+                  }
+                />
+                <FieldDescription>
+                  First matching rule wins. Use {'{{ default }}'} to keep
+                  automatic grouping.
+                </FieldDescription>
+              </Field>
+            </FieldGroup>
+            {formError && groupingTarget && (
+              <Alert variant="destructive">
+                <AlertCircleIcon />
+                <AlertTitle>Save failed</AlertTitle>
+                <AlertDescription>{formError}</AlertDescription>
+              </Alert>
+            )}
+            <DialogFooter>
+              <Button type="submit" disabled={groupingMutation.isPending}>
+                Save grouping
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
       <AlertDialog
         open={rotateTarget != null}
         onOpenChange={(next) => {
@@ -512,12 +638,14 @@ function ProjectRowActions({
   project,
   onCopyDsn,
   onEdit,
+  onGrouping,
   onRotate,
   onDelete,
 }: {
   project: Project
   onCopyDsn: (id: number) => Promise<void>
   onEdit: (project: Project) => void
+  onGrouping: (project: Project) => void
   onRotate: (project: Project) => void
   onDelete: (project: Project) => void
 }) {
@@ -548,6 +676,9 @@ function ProjectRowActions({
           Copy DSN
         </DropdownMenuItem>
         <DropdownMenuItem onClick={() => onEdit(project)}>Edit</DropdownMenuItem>
+        <DropdownMenuItem onClick={() => onGrouping(project)}>
+          Issue grouping
+        </DropdownMenuItem>
         <DropdownMenuItem onClick={() => onRotate(project)}>
           Rotate key
         </DropdownMenuItem>

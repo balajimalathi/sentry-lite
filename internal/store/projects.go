@@ -159,10 +159,12 @@ func (s *Store) insertProject(ctx context.Context, name, slug, publicHost string
 	var createdAt string
 	err = s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		proj := ProjectRow{
-			OrganizationID: org.ID,
-			Slug:           slug,
-			Name:           name,
-			AllowedOrigins: originsJSON,
+			OrganizationID:   org.ID,
+			Slug:             slug,
+			Name:             name,
+			AllowedOrigins:   originsJSON,
+			GroupingConfig:   "sentry-lite:2026-09-01",
+			FingerprintRules: "",
 		}
 		if err := tx.Create(&proj).Error; err != nil {
 			return err
@@ -186,11 +188,13 @@ func (s *Store) insertProject(ctx context.Context, name, slug, publicHost string
 
 	return &CreatedProject{
 		Project: Project{
-			ID:             projectID,
-			Slug:           slug,
-			Name:           name,
-			AllowedOrigins: allowedOrigins,
-			CreatedAt:      createdAt,
+			ID:               projectID,
+			Slug:             slug,
+			Name:             name,
+			AllowedOrigins:   allowedOrigins,
+			GroupingConfig:   "sentry-lite:2026-09-01",
+			FingerprintRules: "",
+			CreatedAt:        createdAt,
 		},
 		PublicKey: pub,
 		SecretKey: sec,
@@ -243,11 +247,13 @@ func (s *Store) GetProject(ctx context.Context, id int64) (*Project, error) {
 		return nil, err
 	}
 	return &Project{
-		ID:             row.ID,
-		Slug:           row.Slug,
-		Name:           row.Name,
-		AllowedOrigins: decodeOriginsJSON(row.AllowedOrigins),
-		CreatedAt:      row.CreatedAt,
+		ID:               row.ID,
+		Slug:             row.Slug,
+		Name:             row.Name,
+		AllowedOrigins:   decodeOriginsJSON(row.AllowedOrigins),
+		GroupingConfig:   row.GroupingConfig,
+		FingerprintRules: row.FingerprintRules,
+		CreatedAt:        row.CreatedAt,
 	}, nil
 }
 
@@ -287,20 +293,37 @@ func (s *Store) latestProjectKey(ctx context.Context, projectID int64) (*Project
 	}, nil
 }
 
-func (s *Store) UpdateProject(ctx context.Context, id int64, name string, allowedOrigins []string) (*Project, error) {
-	name = strings.TrimSpace(name)
-	if name == "" {
-		return nil, fmt.Errorf("name required")
+func (s *Store) UpdateProject(ctx context.Context, id int64, in ProjectUpdate) (*Project, error) {
+	updates := map[string]any{}
+	if in.Name != nil {
+		name := strings.TrimSpace(*in.Name)
+		if name == "" {
+			return nil, fmt.Errorf("name required")
+		}
+		updates["name"] = name
 	}
-	res := s.DB.WithContext(ctx).Model(&ProjectRow{}).Where("id = ?", id).Updates(map[string]any{
-		"name":            name,
-		"allowed_origins": encodeOriginsJSON(allowedOrigins),
-	})
+	if in.AllowedOrigins != nil {
+		updates["allowed_origins"] = encodeOriginsJSON(*in.AllowedOrigins)
+	}
+	if in.GroupingConfig != nil {
+		updates["grouping_config"] = strings.TrimSpace(*in.GroupingConfig)
+	}
+	if in.FingerprintRules != nil {
+		updates["fingerprint_rules"] = *in.FingerprintRules
+	}
+	if len(updates) == 0 {
+		return s.GetProject(ctx, id)
+	}
+	exists, err := s.ProjectExists(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, nil
+	}
+	res := s.DB.WithContext(ctx).Model(&ProjectRow{}).Where("id = ?", id).Updates(updates)
 	if res.Error != nil {
 		return nil, res.Error
-	}
-	if res.RowsAffected == 0 {
-		return nil, nil
 	}
 	return s.GetProject(ctx, id)
 }
@@ -400,6 +423,9 @@ func (s *Store) DeleteProject(ctx context.Context, id int64) (rawPaths []string,
 			return err
 		}
 		if err := tx.Where("project_id = ?", id).Delete(&EventRow{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("project_id = ?", id).Delete(&IssueHashRow{}).Error; err != nil {
 			return err
 		}
 		if err := tx.Where("project_id = ?", id).Delete(&IssueRow{}).Error; err != nil {

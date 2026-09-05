@@ -1,7 +1,11 @@
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import type { ColumnDef, ColumnFiltersState } from '@tanstack/react-table'
+import type {
+  ColumnDef,
+  ColumnFiltersState,
+  Table as TanstackTable,
+} from '@tanstack/react-table'
 import { AlertCircleIcon, MoreHorizontalIcon } from 'lucide-react'
 import { parseAsArrayOf, parseAsString, useQueryStates } from 'nuqs'
 import { api, formatRelativeTime, formatTime, type Issue } from '@/api'
@@ -15,6 +19,7 @@ import { PageHeader } from '@/components/page-header'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -147,6 +152,28 @@ export default function IssuesPage() {
 
   const columns = useMemo<ColumnDef<Issue>[]>(
     () => [
+      {
+        id: 'select',
+        header: ({ table }) => (
+          <Checkbox
+            checked={table.getIsAllPageRowsSelected()}
+            onCheckedChange={(checked) =>
+              table.toggleAllPageRowsSelected(Boolean(checked))
+            }
+            aria-label="Select all issues"
+          />
+        ),
+        cell: ({ row }) => (
+          <Checkbox
+            checked={row.getIsSelected()}
+            onCheckedChange={(checked) => row.toggleSelected(Boolean(checked))}
+            aria-label={`Select ${row.original.title}`}
+          />
+        ),
+        enableSorting: false,
+        enableHiding: false,
+        enableColumnFilter: false,
+      },
       {
         id: 'title',
         accessorKey: 'title',
@@ -411,6 +438,7 @@ export default function IssuesPage() {
     manualFiltering: false,
     manualPagination: false,
     manualSorting: false,
+    getRowId: (row) => String(row.id),
     initialState: {
       sorting: [{ id: 'last_seen', desc: true }],
       pagination: { pageIndex: 0, pageSize: 20 },
@@ -463,11 +491,57 @@ export default function IssuesPage() {
           }
         />
       ) : (
-        <DataTable table={table}>
+        <DataTable table={table} actionBar={<IssueMergeBar table={table} />}>
           <ListDataTableFilters table={table} filterMode={filterMode} />
         </DataTable>
       )}
     </section>
+  )
+}
+
+function IssueMergeBar({ table }: { table: TanstackTable<Issue> }) {
+  const qc = useQueryClient()
+  const selected = table.getFilteredSelectedRowModel().rows.map((r) => r.original)
+  const sameProject =
+    selected.length > 0 &&
+    selected.every((issue) => issue.project_id === selected[0].project_id)
+  const canMerge = selected.length >= 2 && sameProject
+
+  const mutation = useMutation({
+    mutationFn: async () => {
+      const sorted = [...selected].sort((a, b) =>
+        a.first_seen.localeCompare(b.first_seen)
+      )
+      const dest = sorted[0]
+      const ids = sorted.slice(1).map((issue) => issue.id)
+      return api.mergeIssues(dest.id, ids)
+    },
+    onSuccess: () => {
+      table.resetRowSelection()
+      void qc.invalidateQueries({ queryKey: ['issues'] })
+    },
+  })
+
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border bg-background p-2">
+      <p className="text-sm text-muted-foreground">
+        {selected.length} selected
+        {!sameProject && selected.length >= 2
+          ? ' — merge requires the same project'
+          : null}
+      </p>
+      <Button
+        type="button"
+        size="sm"
+        disabled={!canMerge || mutation.isPending}
+        onClick={() => mutation.mutate()}
+      >
+        Merge
+      </Button>
+      {mutation.error ? (
+        <p className="w-full text-sm text-destructive">{String(mutation.error)}</p>
+      ) : null}
+    </div>
   )
 }
 

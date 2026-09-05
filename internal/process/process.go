@@ -152,12 +152,47 @@ func (w *Worker) handleError(ctx context.Context, msg ingest.IngestMessage, rawP
 		})
 	}
 
-	fp := fingerprint.Compute(norm.Fingerprint, norm.ExceptionType, norm.Message, frames)
+	grouping, err := w.Store.ProjectGrouping(ctx, msg.ProjectID)
+	if err != nil {
+		return err
+	}
+	config := fingerprint.ConfigV1
+	var rules []fingerprint.Rule
+	if grouping != nil {
+		config = fingerprint.NormalizeConfig(grouping.GroupingConfig)
+		parsed, perr := fingerprint.ParseRules(grouping.FingerprintRules)
+		if perr != nil {
+			log.Printf("project %d fingerprint rules: %v", msg.ProjectID, perr)
+		} else {
+			rules = parsed
+		}
+	}
+
+	grouped := fingerprint.Group(fingerprint.Input{
+		Config:         config,
+		Rules:          rules,
+		SDKFingerprint: norm.Fingerprint,
+		ExceptionType:  norm.ExceptionType,
+		Message:        norm.Message,
+		Logger:         norm.Logger,
+		Level:          norm.Level,
+		Transaction:    norm.Transaction,
+		Tags:           norm.Tags,
+		Frames:         frames,
+	})
+	fp := grouped.Primary
+	hashes := make([]store.IssueHashInput, 0, len(grouped.Variants))
+	for _, v := range grouped.Variants {
+		hashes = append(hashes, store.IssueHashInput{Hash: v.Hash, Variant: v.Kind})
+	}
 	culprit := norm.Culprit
 	if culprit == "" {
 		culprit = fingerprint.Culprit(frames)
 	}
-	title := norm.Title
+	title := grouped.Title
+	if title == "" {
+		title = norm.Title
+	}
 	if title == "" {
 		if norm.ExceptionType != "" && norm.Message != "" {
 			title = norm.ExceptionType + ": " + truncate(norm.Message, 120)
@@ -171,36 +206,42 @@ func (w *Worker) handleError(ctx context.Context, msg ingest.IngestMessage, rawP
 	}
 
 	summary, _ := json.Marshal(map[string]any{
-		"exception_type": norm.ExceptionType,
-		"message":        norm.Message,
-		"culprit":        culprit,
-		"frames":         norm.Frames,
-		"user":           norm.User,
-		"request":        norm.Request,
-		"tags":           norm.Tags,
-		"breadcrumbs":    norm.Breadcrumbs,
-		"trace_id":       norm.TraceID,
+		"exception_type":   norm.ExceptionType,
+		"message":          norm.Message,
+		"culprit":          culprit,
+		"frames":           norm.Frames,
+		"user":             norm.User,
+		"request":          norm.Request,
+		"tags":             norm.Tags,
+		"breadcrumbs":      norm.Breadcrumbs,
+		"trace_id":         norm.TraceID,
+		"transaction":      norm.Transaction,
+		"grouping_variant": grouped.Variant,
+		"grouping_hash":    grouped.Primary,
 	})
 
 	result, err := w.Store.UpsertEvent(ctx, store.UpsertEventInput{
-		EventID:       norm.EventID,
-		ProjectID:     msg.ProjectID,
-		Fingerprint:   fp,
-		Title:         title,
-		Culprit:       culprit,
-		Level:         norm.Level,
-		Timestamp:     norm.Timestamp,
-		Environment:   norm.Environment,
-		Release:       norm.Release,
-		Platform:      norm.Platform,
-		Message:       norm.Message,
-		ExceptionType: norm.ExceptionType,
-		UserID:        norm.User.ID,
-		UserEmail:     norm.User.Email,
-		TraceID:       norm.TraceID,
-		RawPath:       rawPath,
-		PayloadJSON:   string(summary),
-		Tags:          norm.Tags,
+		EventID:         norm.EventID,
+		ProjectID:       msg.ProjectID,
+		Fingerprint:     fp,
+		Hashes:          hashes,
+		GroupingHash:    grouped.Primary,
+		GroupingVariant: grouped.Variant,
+		Title:           title,
+		Culprit:         culprit,
+		Level:           norm.Level,
+		Timestamp:       norm.Timestamp,
+		Environment:     norm.Environment,
+		Release:         norm.Release,
+		Platform:        norm.Platform,
+		Message:         norm.Message,
+		ExceptionType:   norm.ExceptionType,
+		UserID:          norm.User.ID,
+		UserEmail:       norm.User.Email,
+		TraceID:         norm.TraceID,
+		RawPath:         rawPath,
+		PayloadJSON:     string(summary),
+		Tags:            norm.Tags,
 	})
 	if err != nil {
 		return err
@@ -258,6 +299,7 @@ type Normalized struct {
 	ExceptionType string
 	Culprit       string
 	Title         string
+	Transaction   string
 	Fingerprint   []string
 	Tags          map[string]string
 	Frames        []Frame
@@ -293,8 +335,8 @@ type Frame struct {
 }
 
 type User struct {
-	ID    string `json:"id"`
-	Email string `json:"email"`
+	ID       string `json:"id"`
+	Email    string `json:"email"`
 	Username string `json:"username"`
 }
 
@@ -319,6 +361,7 @@ func Normalize(payload []byte) (*Normalized, error) {
 	}
 	n.Logger = asString(raw["logger"])
 	n.Culprit = asString(raw["culprit"])
+	n.Transaction = asString(raw["transaction"])
 	n.Message = extractMessage(raw["message"])
 
 	if tags, ok := raw["tags"].(map[string]any); ok {
@@ -461,41 +504,81 @@ func extractTraceID(raw map[string]any) string {
 }
 
 func extractException(raw map[string]any) (exType, message string, frames []Frame) {
-	ex, ok := raw["exception"].(map[string]any)
-	if !ok {
-		return "", asString(raw["message"]), nil
-	}
-	values, ok := ex["values"].([]any)
-	if !ok || len(values) == 0 {
-		return "", "", nil
-	}
-	// Use the last (innermost / most relevant) exception
-	last, ok := values[len(values)-1].(map[string]any)
-	if !ok {
-		return "", "", nil
-	}
-	exType = asString(last["type"])
-	message = asString(last["value"])
-	if st, ok := last["stacktrace"].(map[string]any); ok {
-		if fvals, ok := st["frames"].([]any); ok {
-			for _, fv := range fvals {
-				fm, ok := fv.(map[string]any)
-				if !ok {
-					continue
+	message = extractMessage(raw["message"])
+	if ex, ok := raw["exception"].(map[string]any); ok {
+		if values, ok := ex["values"].([]any); ok && len(values) > 0 {
+			if last, ok := values[len(values)-1].(map[string]any); ok {
+				exType = asString(last["type"])
+				if v := asString(last["value"]); v != "" {
+					message = v
 				}
-				frames = append(frames, Frame{
-					Filename: asString(fm["filename"]),
-					Function: asString(fm["function"]),
-					AbsPath:  asString(fm["abs_path"]),
-					Module:   asString(fm["module"]),
-					LineNo:   asInt(fm["lineno"]),
-					ColNo:    asInt(fm["colno"]),
-					InApp:    asBool(fm["in_app"]),
-				})
+				frames = framesFromStack(last["stacktrace"])
 			}
 		}
 	}
+	if len(frames) == 0 {
+		frames = framesFromStack(raw["stacktrace"])
+	}
+	if len(frames) == 0 {
+		frames = framesFromThreads(raw["threads"])
+	}
 	return exType, message, frames
+}
+
+func framesFromStack(v any) []Frame {
+	st, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	fvals, ok := st["frames"].([]any)
+	if !ok {
+		return nil
+	}
+	var frames []Frame
+	for _, fv := range fvals {
+		fm, ok := fv.(map[string]any)
+		if !ok {
+			continue
+		}
+		frames = append(frames, Frame{
+			Filename: asString(fm["filename"]),
+			Function: asString(fm["function"]),
+			AbsPath:  asString(fm["abs_path"]),
+			Module:   asString(fm["module"]),
+			LineNo:   asInt(fm["lineno"]),
+			ColNo:    asInt(fm["colno"]),
+			InApp:    asBool(fm["in_app"]),
+		})
+	}
+	return frames
+}
+
+func framesFromThreads(v any) []Frame {
+	th, ok := v.(map[string]any)
+	if !ok {
+		return nil
+	}
+	values, ok := th["values"].([]any)
+	if !ok || len(values) == 0 {
+		return nil
+	}
+	var fallback map[string]any
+	for _, item := range values {
+		tm, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		fallback = tm
+		if asBool(tm["crashed"]) || asBool(tm["current"]) {
+			if frames := framesFromStack(tm["stacktrace"]); len(frames) > 0 {
+				return frames
+			}
+		}
+	}
+	if fallback != nil {
+		return framesFromStack(fallback["stacktrace"])
+	}
+	return nil
 }
 
 func extractMessage(v any) string {

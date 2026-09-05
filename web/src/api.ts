@@ -10,6 +10,8 @@ export type Project = {
   slug: string
   name: string
   allowed_origins: string[]
+  grouping_config?: string
+  fingerprint_rules?: string
   issue_count: number
   latest_activity_at: string | null
   created_at: string
@@ -43,9 +45,16 @@ export type Issue = {
   last_release: string | null
   regressed: boolean
   assignee?: string | null
+  merged_into?: number | null
   environments?: string[]
   /** Distinct key:value pairs from event_tags (excludes environment / release). */
   tags?: string[]
+}
+
+export type IssueHash = {
+  hash: string
+  variant: string
+  event_count: number
 }
 
 export type Frame = {
@@ -73,6 +82,8 @@ export type Event = {
   user_id: string | null
   user_email: string | null
   trace_id?: string | null
+  grouping_hash?: string | null
+  grouping_variant?: string | null
   raw_path: string
   payload_json?: string
   tags?: Record<string, string>
@@ -258,7 +269,12 @@ export const api = {
   }) => post<CreatedProject>('/api/internal/projects', body),
   updateProject: (
     id: number,
-    body: { name: string; allowed_origins?: string[] }
+    body: {
+      name?: string
+      allowed_origins?: string[]
+      grouping_config?: string
+      fingerprint_rules?: string
+    }
   ) => patch<Project>(`/api/internal/projects/${id}`, body),
   deleteProject: (id: number) => del(`/api/internal/projects/${id}`),
   rotateProjectKey: (id: number) =>
@@ -277,7 +293,12 @@ export const api = {
     return get<Issue[]>(`/api/internal/issues?${q}`)
   },
   issue: (id: string) =>
-    get<{ issue: Issue; latest_event: Event | null }>(`/api/internal/issues/${id}`),
+    get<{
+      issue: Issue
+      latest_event: Event | null
+      hashes?: IssueHash[]
+      merged_into?: number | null
+    }>(`/api/internal/issues/${id}`),
   events: (id: string) => get<Event[]>(`/api/internal/issues/${id}/events`),
   event: (eventId: string) =>
     get<Event>(`/api/internal/events/${encodeURIComponent(eventId)}`),
@@ -285,6 +306,10 @@ export const api = {
     patch<Issue>(`/api/internal/issues/${id}`, { status }),
   updateAssignee: (id: number, assignee: string) =>
     patch<Issue>(`/api/internal/issues/${id}`, { assignee }),
+  mergeIssues: (id: number, ids: number[]) =>
+    post<Issue>(`/api/internal/issues/${id}/merge`, { ids }),
+  unmergeIssues: (id: number, hashes: string[]) =>
+    post<Issue[]>(`/api/internal/issues/${id}/unmerge`, { hashes }),
   releases: (projectId: string) =>
     get<Release[]>(`/api/internal/releases?project_id=${projectId}`),
   createRelease: (body: {
@@ -404,6 +429,8 @@ export function parsePayload(ev: Event | null) {
       exception_type?: string
       message?: string
       trace_id?: string
+      grouping_variant?: string
+      grouping_hash?: string
       request?: Record<string, unknown>
     }
   } catch {

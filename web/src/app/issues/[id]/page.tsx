@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, Navigate, useParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircleIcon } from 'lucide-react'
 import {
@@ -9,6 +9,7 @@ import {
   parsePayload,
   type Event,
   type Issue,
+  type IssueHash,
 } from '@/api'
 import { EventDetailSheet } from '@/components/event-detail-sheet'
 import { StackTrace } from '@/components/stack-trace'
@@ -25,6 +26,7 @@ import {
   BreadcrumbSeparator,
 } from '@/components/ui/breadcrumb'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import {
   Card,
   CardAction,
@@ -72,6 +74,7 @@ export default function IssueDetailPage() {
   const [assigneeDraft, setAssigneeDraft] = useState('')
   const [ownerOpen, setOwnerOpen] = useState(false)
   const [eventId, setEventId] = useState<string | null>(null)
+  const [hashSel, setHashSel] = useState<Record<string, boolean>>({})
 
   const detailQuery = useQuery({
     queryKey: ['issue', id],
@@ -86,6 +89,8 @@ export default function IssueDetailPage() {
 
   const issue = detailQuery.data?.issue ?? null
   const latest = detailQuery.data?.latest_event ?? null
+  const hashes = detailQuery.data?.hashes ?? []
+  const mergedInto = detailQuery.data?.merged_into ?? issue?.merged_into ?? null
   const events = eventsQuery.data ?? []
 
   const statusMutation = useMutation({
@@ -93,6 +98,18 @@ export default function IssueDetailPage() {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['issue', id] })
       void qc.invalidateQueries({ queryKey: ['issues'] })
+    },
+  })
+  const unmergeMutation = useMutation({
+    mutationFn: (selected: string[]) => api.unmergeIssues(Number(id), selected),
+    onSuccess: (created) => {
+      setHashSel({})
+      void qc.invalidateQueries({ queryKey: ['issue', id] })
+      void qc.invalidateQueries({ queryKey: ['issue-events', id] })
+      void qc.invalidateQueries({ queryKey: ['issues'] })
+      if (created[0]) {
+        void qc.invalidateQueries({ queryKey: ['issue', String(created[0].id)] })
+      }
     },
   })
   const assigneeMutation = useMutation({
@@ -129,6 +146,14 @@ export default function IssueDetailPage() {
         <AlertDescription>{error}</AlertDescription>
       </Alert>
     )
+  }
+
+  if (
+    !detailQuery.isLoading &&
+    issue?.status === 'merged' &&
+    mergedInto
+  ) {
+    return <Navigate to={`/issues/${mergedInto}`} replace />
   }
 
   if (detailQuery.isLoading || !issue) {
@@ -186,6 +211,12 @@ export default function IssueDetailPage() {
             </div>
             <p className="font-mono text-sm text-muted-foreground break-all">
               {issue.culprit || 'No culprit'}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Grouped by{' '}
+              {groupingLabel(
+                latest?.grouping_variant ?? payload?.grouping_variant
+              )}
             </p>
           </div>
           <Dialog open={ownerOpen} onOpenChange={onOwnerOpenChange}>
@@ -297,6 +328,87 @@ export default function IssueDetailPage() {
           </Card>
         ))}
       </div>
+
+      {hashes.length > 0 && (
+        <Card className="min-w-0 overflow-hidden">
+          <CardHeader className="border-b">
+            <CardTitle>Merged hashes</CardTitle>
+            <CardDescription>
+              Fingerprints attached to this issue. Unmerge splits extra hashes
+              into new issues.
+            </CardDescription>
+            {hashes.length > 1 && (
+              <CardAction>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={
+                    unmergeMutation.isPending ||
+                    hashes.filter((h) => hashSel[h.hash]).length === 0 ||
+                    hashes.filter((h) => hashSel[h.hash]).length >= hashes.length
+                  }
+                  onClick={() =>
+                    unmergeMutation.mutate(
+                      hashes.filter((h) => hashSel[h.hash]).map((h) => h.hash)
+                    )
+                  }
+                >
+                  Unmerge
+                </Button>
+              </CardAction>
+            )}
+          </CardHeader>
+          <CardContent className="min-w-0 px-0">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  {hashes.length > 1 && (
+                    <TableHead className="w-10 pl-4"> </TableHead>
+                  )}
+                  <TableHead className={hashes.length > 1 ? '' : 'pl-4'}>
+                    Variant
+                  </TableHead>
+                  <TableHead>Hash</TableHead>
+                  <TableHead className="pr-4">Events</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {hashes.map((h: IssueHash) => (
+                  <TableRow key={h.hash}>
+                    {hashes.length > 1 && (
+                      <TableCell className="pl-4">
+                        <Checkbox
+                          checked={Boolean(hashSel[h.hash])}
+                          onCheckedChange={(checked) =>
+                            setHashSel((prev) => ({
+                              ...prev,
+                              [h.hash]: Boolean(checked),
+                            }))
+                          }
+                          aria-label={`Select hash ${h.hash}`}
+                        />
+                      </TableCell>
+                    )}
+                    <TableCell className={hashes.length > 1 ? '' : 'pl-4'}>
+                      {groupingLabel(h.variant)}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs break-all">
+                      {h.hash}
+                    </TableCell>
+                    <TableCell className="pr-4">{h.event_count}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            {unmergeMutation.error ? (
+              <p className="px-4 py-2 text-sm text-destructive">
+                {String(unmergeMutation.error)}
+              </p>
+            ) : null}
+          </CardContent>
+        </Card>
+      )}
 
       {traceId && (
         <p className="min-w-0 text-sm break-all">
@@ -486,4 +598,25 @@ export default function IssueDetailPage() {
       />
     </section>
   )
+}
+
+function groupingLabel(variant?: string | null) {
+  switch (variant) {
+    case 'app':
+      return 'in-app stacktrace'
+    case 'system':
+      return 'full stacktrace'
+    case 'exception':
+      return 'exception type and value'
+    case 'message':
+      return 'message'
+    case 'custom':
+      return 'SDK fingerprint'
+    case 'rule':
+      return 'fingerprint rule'
+    case 'v1':
+      return 'legacy grouping'
+    default:
+      return variant || 'default'
+  }
 }

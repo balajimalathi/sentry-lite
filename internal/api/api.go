@@ -12,6 +12,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/skndan/sentry-lite/internal/alerts"
 	"github.com/skndan/sentry-lite/internal/auth"
+	"github.com/skndan/sentry-lite/internal/fingerprint"
 	"github.com/skndan/sentry-lite/internal/store"
 )
 
@@ -38,6 +39,8 @@ func (h *Handler) Routes(r chi.Router) {
 		r.Get("/issues/{id}", h.GetIssue)
 		r.Get("/issues/{id}/events", h.ListEvents)
 		r.Patch("/issues/{id}", h.UpdateIssue)
+		r.Post("/issues/{id}/merge", h.MergeIssues)
+		r.Post("/issues/{id}/unmerge", h.UnmergeIssues)
 		r.Get("/events/{eventID}", h.GetEvent)
 
 		r.Get("/releases", h.ListReleases)
@@ -124,14 +127,31 @@ func (h *Handler) UpdateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name           string   `json:"name"`
-		AllowedOrigins []string `json:"allowed_origins"`
+		Name             *string   `json:"name"`
+		AllowedOrigins   *[]string `json:"allowed_origins"`
+		GroupingConfig   *string   `json:"grouping_config"`
+		FingerprintRules *string   `json:"fingerprint_rules"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	proj, err := h.Store.UpdateProject(r.Context(), id, body.Name, body.AllowedOrigins)
+	if body.GroupingConfig != nil && !fingerprint.ValidConfig(*body.GroupingConfig) {
+		http.Error(w, "invalid grouping_config", http.StatusBadRequest)
+		return
+	}
+	if body.FingerprintRules != nil {
+		if _, err := fingerprint.ParseRules(*body.FingerprintRules); err != nil {
+			http.Error(w, "invalid fingerprint_rules: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	proj, err := h.Store.UpdateProject(r.Context(), id, store.ProjectUpdate{
+		Name:             body.Name,
+		AllowedOrigins:   body.AllowedOrigins,
+		GroupingConfig:   body.GroupingConfig,
+		FingerprintRules: body.FingerprintRules,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -236,6 +256,7 @@ func (h *Handler) ListIssues(w http.ResponseWriter, r *http.Request) {
 		TagValue:    tagVal,
 		From:        q.Get("from"),
 		To:          q.Get("to"),
+		Status:      q.Get("status"),
 		Limit:       100,
 	})
 	if err != nil {
@@ -268,9 +289,19 @@ func (h *Handler) GetIssue(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	hashes, err := h.Store.ListIssueHashes(r.Context(), id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if hashes == nil {
+		hashes = []store.IssueHash{}
+	}
 	writeJSON(w, map[string]any{
 		"issue":        iss,
 		"latest_event": latest,
+		"hashes":       hashes,
+		"merged_into":  iss.MergedInto,
 	})
 }
 
@@ -329,6 +360,51 @@ func (h *Handler) UpdateIssue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, iss)
+}
+
+func (h *Handler) MergeIssues(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		IDs []int64 `json:"ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	iss, err := h.Store.MergeIssues(r.Context(), id, body.IDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, iss)
+}
+
+func (h *Handler) UnmergeIssues(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Hashes []string `json:"hashes"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "bad json", http.StatusBadRequest)
+		return
+	}
+	issues, err := h.Store.UnmergeIssueHashes(r.Context(), id, body.Hashes)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if issues == nil {
+		issues = []store.Issue{}
+	}
+	writeJSON(w, issues)
 }
 
 func (h *Handler) ListReleases(w http.ResponseWriter, r *http.Request) {
