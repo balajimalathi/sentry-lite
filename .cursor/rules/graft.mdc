@@ -1,0 +1,31 @@
+---
+description: Use the Graft context graph via the graft CLI before exploring source
+alwaysApply: true
+---
+
+# Graft CLI
+
+This repo is indexed in `graft/`. For any task — finding code, understanding a system, or scoping a change — query Graft **before** grepping or opening source files.
+
+Invoke the globally installed CLI as `graft`. If it is missing, use `npx -y @nanonets/graft`. If `graft/` is missing or `graft check` fails, run `graft build` first (no API key).
+
+New to this repo? Start with `graft map`.
+
+```bash
+graft ask "<question>" --source
+graft grep "<literal or regex>"
+graft skeleton <file>
+graft callers <symbol>
+graft map
+graft check
+```
+
+- `graft ask "<task>" --source` — ranked nodes with inlined spans. For understanding or editing, the top hit is the answer: cite its `covers:` file:line and edit that span. Add `--full` only when the crux is too short.
+- `graft grep "<literal>"` — exhaustive search over indexed files, grouped by enclosing symbol. Use this for "every occurrence / every caller". Fall back to raw `grep -rn` only for unindexed files.
+- `graft skeleton <file>` — signatures + spans; cheaper than reading the file.
+- `graft callers <symbol>` — who calls this. `--direction out` for callees; `--depth N` for blast radius.
+- Monorepo: hits are labeled `[scope/]`. Narrow with `graft ask "<task>" --in <scope>/`.
+
+Do not re-read whole files. Open source only at the exact file:line Graft returned, and only when a node is missing a needed detail. If a span is truncated ("+N more lines"), open that range before finalizing.
+
+After large edits, refresh with `graft build` (deterministic, $0, no key).

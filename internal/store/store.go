@@ -30,6 +30,8 @@ type Project struct {
 	Slug             string   `json:"slug"`
 	Name             string   `json:"name"`
 	AllowedOrigins   []string `json:"allowed_origins"`
+	GroupingConfig   string   `json:"grouping_config"`
+	FingerprintRules string   `json:"fingerprint_rules"`
 	IssueCount       int64    `json:"issue_count"`
 	LatestActivityAt *string  `json:"latest_activity_at"`
 	CreatedAt        string   `json:"created_at"`
@@ -50,28 +52,31 @@ type Issue struct {
 	LastRelease  *string  `json:"last_release"`
 	Regressed    bool     `json:"regressed"`
 	Assignee     *string  `json:"assignee,omitempty"`
+	MergedInto   *int64   `json:"merged_into,omitempty"`
 	Environments []string `json:"environments,omitempty"`
 	Tags         []string `json:"tags,omitempty"`
 }
 
 type Event struct {
-	ID            int64             `json:"id"`
-	EventID       string            `json:"event_id"`
-	IssueID       int64             `json:"issue_id"`
-	ProjectID     int64             `json:"project_id"`
-	Timestamp     string            `json:"timestamp"`
-	Environment   *string           `json:"environment"`
-	Release       *string           `json:"release"`
-	Platform      *string           `json:"platform"`
-	Message       *string           `json:"message"`
-	ExceptionType *string           `json:"exception_type"`
-	Culprit       *string           `json:"culprit"`
-	UserID        *string           `json:"user_id"`
-	UserEmail     *string           `json:"user_email"`
-	TraceID       *string           `json:"trace_id,omitempty"`
-	RawPath       string            `json:"raw_path"`
-	PayloadJSON   string            `json:"payload_json,omitempty"`
-	Tags          map[string]string `json:"tags,omitempty"`
+	ID              int64             `json:"id"`
+	EventID         string            `json:"event_id"`
+	IssueID         int64             `json:"issue_id"`
+	ProjectID       int64             `json:"project_id"`
+	Timestamp       string            `json:"timestamp"`
+	Environment     *string           `json:"environment"`
+	Release         *string           `json:"release"`
+	Platform        *string           `json:"platform"`
+	Message         *string           `json:"message"`
+	ExceptionType   *string           `json:"exception_type"`
+	Culprit         *string           `json:"culprit"`
+	UserID          *string           `json:"user_id"`
+	UserEmail       *string           `json:"user_email"`
+	TraceID         *string           `json:"trace_id,omitempty"`
+	GroupingHash    *string           `json:"grouping_hash,omitempty"`
+	GroupingVariant *string           `json:"grouping_variant,omitempty"`
+	RawPath         string            `json:"raw_path"`
+	PayloadJSON     string            `json:"payload_json,omitempty"`
+	Tags            map[string]string `json:"tags,omitempty"`
 }
 
 type IssueListFilter struct {
@@ -83,6 +88,7 @@ type IssueListFilter struct {
 	TagValue    string
 	From        string // RFC3339
 	To          string // RFC3339
+	Status      string
 	Limit       int
 }
 
@@ -146,19 +152,21 @@ func (s *Store) LookupProjectKey(ctx context.Context, publicKey string, projectI
 
 func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	type projectScan struct {
-		ID             int64
-		Slug           string
-		Name           string
-		AllowedOrigins string
-		CreatedAt      string
-		IssueCount     int64
-		LatestActivity *string
+		ID               int64
+		Slug             string
+		Name             string
+		AllowedOrigins   string
+		GroupingConfig   string
+		FingerprintRules string
+		CreatedAt        string
+		IssueCount       int64
+		LatestActivity   *string
 	}
 	var rows []projectScan
 	err := s.DB.WithContext(ctx).Raw(`
-		SELECT p.id, p.slug, p.name, p.allowed_origins, p.created_at,
-		       COALESCE((SELECT COUNT(*) FROM issues i WHERE i.project_id = p.id), 0) AS issue_count,
-		       (SELECT MAX(i.last_seen) FROM issues i WHERE i.project_id = p.id) AS latest_activity
+		SELECT p.id, p.slug, p.name, p.allowed_origins, p.grouping_config, p.fingerprint_rules, p.created_at,
+		       COALESCE((SELECT COUNT(*) FROM issues i WHERE i.project_id = p.id AND i.status != 'merged'), 0) AS issue_count,
+		       (SELECT MAX(i.last_seen) FROM issues i WHERE i.project_id = p.id AND i.status != 'merged') AS latest_activity
 		FROM projects p
 		ORDER BY p.id ASC
 	`).Scan(&rows).Error
@@ -172,6 +180,8 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 			Slug:             r.Slug,
 			Name:             r.Name,
 			AllowedOrigins:   decodeOriginsJSON(r.AllowedOrigins),
+			GroupingConfig:   r.GroupingConfig,
+			FingerprintRules: r.FingerprintRules,
 			IssueCount:       r.IssueCount,
 			LatestActivityAt: r.LatestActivity,
 			CreatedAt:        r.CreatedAt,
@@ -216,6 +226,13 @@ func (s *Store) ListIssues(ctx context.Context, f IssueListFilter) ([]Issue, err
 		))`)
 		q := "%" + f.Query + "%"
 		args = append(args, q, q, q, q)
+	}
+	if f.Status == "merged" {
+		conds = append(conds, "i.status = ?")
+		args = append(args, "merged")
+	} else {
+		conds = append(conds, "i.status != ?")
+		args = append(args, "merged")
 	}
 	args = append(args, f.Limit)
 	query := `SELECT i.id, i.project_id, i.fingerprint, i.title, i.culprit, i.status, i.level,
@@ -292,6 +309,7 @@ func issueFromRow(row *IssueRow) Issue {
 		LastRelease:  row.LastRelease,
 		Regressed:    row.Regressed == 1,
 		Assignee:     row.Assignee,
+		MergedInto:   row.MergedInto,
 	}
 }
 
@@ -407,46 +425,56 @@ func eventsFromRows(rows []EventRow) []Event {
 	out := make([]Event, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, Event{
-			ID:            r.ID,
-			EventID:       r.EventID,
-			IssueID:       r.IssueID,
-			ProjectID:     r.ProjectID,
-			Timestamp:     r.Timestamp,
-			Environment:   r.Environment,
-			Release:       r.Release,
-			Platform:      r.Platform,
-			Message:       r.Message,
-			ExceptionType: r.ExceptionType,
-			Culprit:       r.Culprit,
-			UserID:        r.UserID,
-			UserEmail:     r.UserEmail,
-			TraceID:       r.TraceID,
-			RawPath:       r.RawPath,
-			PayloadJSON:   r.PayloadJSON,
+			ID:              r.ID,
+			EventID:         r.EventID,
+			IssueID:         r.IssueID,
+			ProjectID:       r.ProjectID,
+			Timestamp:       r.Timestamp,
+			Environment:     r.Environment,
+			Release:         r.Release,
+			Platform:        r.Platform,
+			Message:         r.Message,
+			ExceptionType:   r.ExceptionType,
+			Culprit:         r.Culprit,
+			UserID:          r.UserID,
+			UserEmail:       r.UserEmail,
+			TraceID:         r.TraceID,
+			GroupingHash:    r.GroupingHash,
+			GroupingVariant: r.GroupingVariant,
+			RawPath:         r.RawPath,
+			PayloadJSON:     r.PayloadJSON,
 		})
 	}
 	return out
 }
 
+type IssueHashInput struct {
+	Hash    string
+	Variant string
+}
+
 type UpsertEventInput struct {
-	EventID       string
-	ProjectID     int64
-	Fingerprint   string
-	Title         string
-	Culprit       string
-	Level         string
-	Timestamp     time.Time
-	Environment   string
-	Release       string
-	Platform      string
-	Message       string
-	ExceptionType string
-	UserID        string
-	UserEmail     string
-	TraceID       string
-	RawPath       string
-	PayloadJSON   string
-	Tags          map[string]string
+	EventID         string
+	ProjectID       int64
+	Fingerprint     string
+	Hashes          []IssueHashInput
+	GroupingHash    string
+	GroupingVariant string
+	Title           string
+	Culprit         string
+	Level           string
+	Timestamp       time.Time
+	Environment     string
+	Release         string
+	Platform        string
+	Message         string
+	ExceptionType   string
+	UserID          string
+	UserEmail       string
+	TraceID         string
+	RawPath         string
+	PayloadJSON     string
+	Tags            map[string]string
 }
 
 type UpsertResult struct {
@@ -461,13 +489,12 @@ func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertRe
 	ts := in.Timestamp.UTC().Format(time.RFC3339Nano)
 
 	err := s.DB.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		var issue IssueRow
-		q := tx.Where("project_id = ? AND fingerprint = ?", in.ProjectID, in.Fingerprint).Limit(1).Find(&issue)
-		if q.Error != nil {
-			return q.Error
+		issue, err := findIssueForEvent(tx, in)
+		if err != nil {
+			return err
 		}
-		if q.RowsAffected == 0 {
-			issue = IssueRow{
+		if issue == nil {
+			created := IssueRow{
 				ProjectID:    in.ProjectID,
 				Fingerprint:  in.Fingerprint,
 				Title:        in.Title,
@@ -481,9 +508,10 @@ func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertRe
 				LastRelease:  strPtrOrNil(in.Release),
 				Regressed:    0,
 			}
-			if err := tx.Create(&issue).Error; err != nil {
+			if err := tx.Create(&created).Error; err != nil {
 				return err
 			}
+			issue = &created
 			result.IsNew = true
 			result.IssueID = issue.ID
 		} else {
@@ -524,22 +552,32 @@ func (s *Store) UpsertEvent(ctx context.Context, in UpsertEventInput) (*UpsertRe
 			}
 		}
 
+		if err := insertMissingHashes(tx, in.ProjectID, result.IssueID, in.Hashes, in.Fingerprint, in.GroupingVariant); err != nil {
+			return err
+		}
+
+		groupingHash := in.GroupingHash
+		if groupingHash == "" {
+			groupingHash = in.Fingerprint
+		}
 		ev := EventRow{
-			EventID:       in.EventID,
-			IssueID:       result.IssueID,
-			ProjectID:     in.ProjectID,
-			Timestamp:     ts,
-			Environment:   strPtrOrNil(in.Environment),
-			Release:       strPtrOrNil(in.Release),
-			Platform:      strPtrOrNil(in.Platform),
-			Message:       strPtrOrNil(in.Message),
-			ExceptionType: strPtrOrNil(in.ExceptionType),
-			Culprit:       strPtrOrNil(in.Culprit),
-			UserID:        strPtrOrNil(in.UserID),
-			UserEmail:     strPtrOrNil(in.UserEmail),
-			TraceID:       strPtrOrNil(in.TraceID),
-			RawPath:       in.RawPath,
-			PayloadJSON:   in.PayloadJSON,
+			EventID:         in.EventID,
+			IssueID:         result.IssueID,
+			ProjectID:       in.ProjectID,
+			Timestamp:       ts,
+			Environment:     strPtrOrNil(in.Environment),
+			Release:         strPtrOrNil(in.Release),
+			Platform:        strPtrOrNil(in.Platform),
+			Message:         strPtrOrNil(in.Message),
+			ExceptionType:   strPtrOrNil(in.ExceptionType),
+			Culprit:         strPtrOrNil(in.Culprit),
+			UserID:          strPtrOrNil(in.UserID),
+			UserEmail:       strPtrOrNil(in.UserEmail),
+			TraceID:         strPtrOrNil(in.TraceID),
+			GroupingHash:    strPtrOrNil(groupingHash),
+			GroupingVariant: strPtrOrNil(in.GroupingVariant),
+			RawPath:         in.RawPath,
+			PayloadJSON:     in.PayloadJSON,
 		}
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&ev).Error; err != nil {
 			return err

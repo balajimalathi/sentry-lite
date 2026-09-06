@@ -10,6 +10,8 @@ export type Project = {
   slug: string
   name: string
   allowed_origins: string[]
+  grouping_config?: string
+  fingerprint_rules?: string
   issue_count: number
   latest_activity_at: string | null
   created_at: string
@@ -43,9 +45,16 @@ export type Issue = {
   last_release: string | null
   regressed: boolean
   assignee?: string | null
+  merged_into?: number | null
   environments?: string[]
   /** Distinct key:value pairs from event_tags (excludes environment / release). */
   tags?: string[]
+}
+
+export type IssueHash = {
+  hash: string
+  variant: string
+  event_count: number
 }
 
 export type Frame = {
@@ -73,6 +82,8 @@ export type Event = {
   user_id: string | null
   user_email: string | null
   trace_id?: string | null
+  grouping_hash?: string | null
+  grouping_variant?: string | null
   raw_path: string
   payload_json?: string
   tags?: Record<string, string>
@@ -112,10 +123,27 @@ export type TransactionSample = {
   spans?: Span[]
 }
 
+export type LogEntry = {
+  id: number
+  project_id: number
+  timestamp: string
+  level: string
+  body: string
+  trace_id: string
+  span_id: string
+  severity_number: number
+  environment: string | null
+  release: string | null
+  origin: string
+  payload_json?: string
+  attributes?: Record<string, unknown>
+}
+
 export type TraceDetail = {
   trace_id: string
   transactions: TransactionSample[]
   issues: Array<{ issue_id: number; title: string; event_id: string }>
+  logs?: LogEntry[]
 }
 
 export type CronMonitor = {
@@ -258,7 +286,12 @@ export const api = {
   }) => post<CreatedProject>('/api/internal/projects', body),
   updateProject: (
     id: number,
-    body: { name: string; allowed_origins?: string[] }
+    body: {
+      name?: string
+      allowed_origins?: string[]
+      grouping_config?: string
+      fingerprint_rules?: string
+    }
   ) => patch<Project>(`/api/internal/projects/${id}`, body),
   deleteProject: (id: number) => del(`/api/internal/projects/${id}`),
   rotateProjectKey: (id: number) =>
@@ -277,7 +310,12 @@ export const api = {
     return get<Issue[]>(`/api/internal/issues?${q}`)
   },
   issue: (id: string) =>
-    get<{ issue: Issue; latest_event: Event | null }>(`/api/internal/issues/${id}`),
+    get<{
+      issue: Issue
+      latest_event: Event | null
+      hashes?: IssueHash[]
+      merged_into?: number | null
+    }>(`/api/internal/issues/${id}`),
   events: (id: string) => get<Event[]>(`/api/internal/issues/${id}/events`),
   event: (eventId: string) =>
     get<Event>(`/api/internal/events/${encodeURIComponent(eventId)}`),
@@ -285,6 +323,10 @@ export const api = {
     patch<Issue>(`/api/internal/issues/${id}`, { status }),
   updateAssignee: (id: number, assignee: string) =>
     patch<Issue>(`/api/internal/issues/${id}`, { assignee }),
+  mergeIssues: (id: number, ids: number[]) =>
+    post<Issue>(`/api/internal/issues/${id}/merge`, { ids }),
+  unmergeIssues: (id: number, hashes: string[]) =>
+    post<Issue[]>(`/api/internal/issues/${id}/unmerge`, { hashes }),
   releases: (projectId: string) =>
     get<Release[]>(`/api/internal/releases?project_id=${projectId}`),
   createRelease: (body: {
@@ -325,6 +367,14 @@ export const api = {
     ),
   trace: (traceId: string) =>
     get<TraceDetail>(`/api/internal/traces/${encodeURIComponent(traceId)}`),
+  logs: (params: { project_id: string; level?: string; q?: string; limit?: string }) => {
+    const q = new URLSearchParams()
+    q.set('project_id', params.project_id)
+    if (params.level) q.set('level', params.level)
+    if (params.q) q.set('q', params.q)
+    if (params.limit) q.set('limit', params.limit)
+    return get<LogEntry[]>(`/api/internal/logs?${q}`)
+  },
   crons: (projectId?: string) =>
     get<CronMonitor[]>(
       projectId
@@ -404,6 +454,8 @@ export function parsePayload(ev: Event | null) {
       exception_type?: string
       message?: string
       trace_id?: string
+      grouping_variant?: string
+      grouping_hash?: string
       request?: Record<string, unknown>
     }
   } catch {

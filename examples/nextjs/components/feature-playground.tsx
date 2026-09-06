@@ -13,6 +13,7 @@ import {
   PackageIcon,
   TimerIcon,
   BellIcon,
+  ScrollTextIcon,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -26,6 +27,7 @@ import {
 } from "@/components/ui/card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
+  captureDemoLogs,
   captureDemoMessage,
   captureFingerprintedPair,
   captureReleaseEvents,
@@ -57,7 +59,7 @@ function TriageHint() {
         >
           :8080
         </a>
-        ). Project 3 — Issues, Performance, Releases, Crons, Alerts.
+        ). Project 3 — Issues, Logs, Performance, Releases, Crons, Alerts.
       </AlertDescription>
     </Alert>
   )
@@ -136,7 +138,7 @@ export function FeaturePlayground() {
           sentry-lite · Next.js playground
         </h1>
         <p className="text-sm text-muted-foreground">
-          Exercise errors, context, mock APIs / performance, releases, crons,
+          Exercise errors, logs, context, mock APIs / performance, releases, crons,
           and alerts via{" "}
           <code className="text-xs">@sentry/nextjs</code> against local
           sentry-lite (project 3).
@@ -196,6 +198,51 @@ export function FeaturePlayground() {
           >
             <ServerCrashIcon data-icon="inline-start" />
             Server capture
+          </Button>
+        </CardFooter>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <ScrollTextIcon className="size-4" />
+            Logs
+          </CardTitle>
+          <CardDescription>
+            enableLogs + consoleLoggingIntegration → Logs (not Issues).
+          </CardDescription>
+        </CardHeader>
+        <CardFooter className="flex flex-wrap gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => {
+              console.log("sample console.log (sentry-lite)")
+              console.info("sample console.info (sentry-lite)")
+              console.warn("sample console.warn (sentry-lite)")
+              console.error("sample console.error (sentry-lite)")
+              void Sentry.flush(2000)
+              setStatus("Client console logs sent. Check Logs for project 3.")
+            }}
+          >
+            <ScrollTextIcon data-icon="inline-start" />
+            Client console logs
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={pending}
+            onClick={() =>
+              run("Server logs", async () => {
+                const result = await captureDemoLogs()
+                return result?.ok
+                  ? "Server console logs sent. Check Logs."
+                  : result
+              })
+            }
+          >
+            <ScrollTextIcon data-icon="inline-start" />
+            Server console logs
           </Button>
         </CardFooter>
       </Card>

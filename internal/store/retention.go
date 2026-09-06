@@ -9,6 +9,7 @@ import (
 type PurgeResult struct {
 	Events       int64
 	Transactions int64
+	Logs         int64
 	Files        int
 }
 
@@ -58,6 +59,12 @@ func (s *Store) PurgeBefore(ctx context.Context, cutoff time.Time) (*PurgeResult
 		return nil, res.Error
 	}
 	out.Transactions = res.RowsAffected
+
+	res = db.Where("timestamp < ?", cutoffStr).Delete(&LogRow{})
+	if res.Error != nil {
+		return nil, res.Error
+	}
+	out.Logs = res.RowsAffected
 
 	seen := map[string]bool{}
 	for _, p := range append(eventPaths, txPaths...) {

@@ -108,6 +108,21 @@ export async function captureServerException() {
   )
 }
 
+export async function captureDemoLogs() {
+  return Sentry.withServerActionInstrumentation(
+    "captureDemoLogs",
+    { recordResponse: true },
+    async () => {
+      console.log("sample console.log (sentry-lite)")
+      console.info("sample console.info (sentry-lite)")
+      console.warn("sample console.warn (sentry-lite)")
+      console.error("sample console.error (sentry-lite)")
+      await Sentry.flush(2000)
+      return { ok: true as const }
+    }
+  )
+}
+
 export async function captureDemoMessage() {
   return Sentry.withServerActionInstrumentation(
     "captureDemoMessage",

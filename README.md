@@ -24,6 +24,7 @@ TUI resource stats while the API, web UI, and Redpanda are running:
 
 - **Sentry-compatible ingest** — envelopes + legacy store; use `@sentry/`* SDKs as-is
 - **Issue triage UI** — filter by environment, release, tags; resolve / ignore / assign
+- **Logs** — Sentry `enableLogs` / `consoleLoggingIntegration` envelope ingest
 - **Performance** — transactions, spans, p95/p99, trace detail
 - **Crons** — heartbeat monitors with missed-check alerts
 - **Releases** — register versions and track issue/event health
