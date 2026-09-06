@@ -215,6 +215,24 @@ type CronCheckinRow struct {
 
 func (CronCheckinRow) TableName() string { return "cron_checkins" }
 
+type LogRow struct {
+	ID             int64   `gorm:"column:id;primaryKey;autoIncrement"`
+	ProjectID      int64   `gorm:"column:project_id;not null;index:idx_logs_project_ts;index:idx_logs_project_level_ts"`
+	Timestamp      string  `gorm:"column:timestamp;not null;index:idx_logs_project_ts,sort:desc;index:idx_logs_project_level_ts,sort:desc"`
+	Level          string  `gorm:"column:level;not null;default:'info';index:idx_logs_project_level_ts"`
+	Body           string  `gorm:"column:body;not null;default:''"`
+	TraceID        string  `gorm:"column:trace_id;not null;default:'';index:idx_logs_trace"`
+	SpanID         string  `gorm:"column:span_id;not null;default:''"`
+	SeverityNumber int     `gorm:"column:severity_number;not null;default:0"`
+	Environment    *string `gorm:"column:environment"`
+	Release        *string `gorm:"column:release"`
+	Origin         string  `gorm:"column:origin;not null;default:''"`
+	PayloadJSON    string  `gorm:"column:payload_json;not null;default:'{}'"`
+	CreatedAt      string  `gorm:"column:created_at;not null;default:(datetime('now'))"`
+}
+
+func (LogRow) TableName() string { return "logs" }
+
 func allModels() []any {
 	return []any{
 		&Organization{},
@@ -232,5 +250,6 @@ func allModels() []any {
 		&TransactionStatRow{},
 		&CronMonitorRow{},
 		&CronCheckinRow{},
+		&LogRow{},
 	}
 }

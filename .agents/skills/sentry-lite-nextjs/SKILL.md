@@ -84,6 +84,12 @@ Sentry.init({
   environment: process.env.NODE_ENV,
   release: process.env.NEXT_PUBLIC_SENTRY_RELEASE,
   tracesSampleRate: 1.0,
+  enableLogs: true,
+  integrations: [
+    Sentry.consoleLoggingIntegration({
+      levels: ["log", "info", "warn", "error"],
+    }),
+  ],
   initialScope: {
     tags: { service: "web" },
   },
@@ -102,6 +108,12 @@ Sentry.init({
   environment: process.env.NODE_ENV,
   release: process.env.NEXT_PUBLIC_SENTRY_RELEASE,
   tracesSampleRate: 1.0,
+  enableLogs: true,
+  integrations: [
+    Sentry.consoleLoggingIntegration({
+      levels: ["log", "info", "warn", "error"],
+    }),
+  ],
   initialScope: {
     tags: { service: "web" },
   },
@@ -194,6 +206,7 @@ Sentry.captureException(err, { tags: { service: "api" } })
 Sentry.captureMessage("something happened", { level: "info" })
 Sentry.setUser({ id, email })
 Sentry.addBreadcrumb({ category: "auth", message: "login", level: "info" })
+Sentry.logger.info("widget fetched", { widgetId })
 
 await Sentry.startSpan({ name: "GET /api/widgets", op: "http.server" }, async () => {
   await Sentry.startSpan({ name: "SELECT * FROM widgets", op: "db" }, async () => {

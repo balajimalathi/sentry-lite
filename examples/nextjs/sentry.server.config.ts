@@ -5,6 +5,12 @@ Sentry.init({
   environment: "development",
   release: "sample@0.1.0",
   tracesSampleRate: 1.0,
+  enableLogs: true,
+  integrations: [
+    Sentry.consoleLoggingIntegration({
+      levels: ["log", "info", "warn", "error"],
+    }),
+  ],
   initialScope: {
     tags: { service: "sample" },
   },

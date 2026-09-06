@@ -39,7 +39,7 @@ func (w *RetentionWorker) purge(ctx context.Context) {
 		log.Printf("retention purge: %v", err)
 		return
 	}
-	if res.Events > 0 || res.Transactions > 0 {
-		log.Printf("retention purged events=%d transactions=%d files=%d", res.Events, res.Transactions, res.Files)
+	if res.Events > 0 || res.Transactions > 0 || res.Logs > 0 {
+		log.Printf("retention purged events=%d transactions=%d logs=%d files=%d", res.Events, res.Transactions, res.Logs, res.Files)
 	}
 }

@@ -65,11 +65,6 @@ func (w *Worker) handle(ctx context.Context, value []byte) error {
 		return nil
 	}
 
-	rawPath, err := w.writePayload(msg.ProjectID, msg.EventID, msg.Payload)
-	if err != nil {
-		return err
-	}
-
 	kind := msg.Kind
 	if kind == "" {
 		var peek map[string]any
@@ -83,10 +78,53 @@ func (w *Worker) handle(ctx context.Context, value []byte) error {
 		}
 	}
 
+	if kind == "log" {
+		return w.handleLog(ctx, msg)
+	}
+
+	rawPath, err := w.writePayload(msg.ProjectID, msg.EventID, msg.Payload)
+	if err != nil {
+		return err
+	}
+
 	if kind == "transaction" {
 		return w.handleTransaction(ctx, msg, rawPath)
 	}
 	return w.handleError(ctx, msg, rawPath)
+}
+
+func (w *Worker) handleLog(ctx context.Context, msg ingest.IngestMessage) error {
+	logs, err := NormalizeLogs(msg.Payload, msg.Environment, msg.Release)
+	if err != nil {
+		return err
+	}
+	if len(logs) == 0 {
+		return nil
+	}
+	rows := make([]store.LogRow, 0, len(logs))
+	for _, n := range logs {
+		rows = append(rows, store.LogRow{
+			ProjectID:      msg.ProjectID,
+			Timestamp:      n.Timestamp.UTC().Format(time.RFC3339Nano),
+			Level:          n.Level,
+			Body:           n.Body,
+			TraceID:        n.TraceID,
+			SpanID:         n.SpanID,
+			SeverityNumber: n.SeverityNumber,
+			Environment:    strPtrOrEmpty(n.Environment),
+			Release:        strPtrOrEmpty(n.Release),
+			Origin:         n.Origin,
+			PayloadJSON:    n.PayloadJSON,
+		})
+	}
+	return w.Store.InsertLogs(ctx, rows)
+}
+
+func strPtrOrEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func (w *Worker) handleTransaction(ctx context.Context, msg ingest.IngestMessage, rawPath string) error {

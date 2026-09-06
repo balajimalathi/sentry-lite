@@ -7,6 +7,7 @@ import DashboardPage from './page'
 import ProjectsPage from './projects/page'
 import IssuesPage from './issues/page'
 import IssueDetailPage from './issues/[id]/page'
+import LogsPage from './logs/page'
 import ReleasesPage from './releases/page'
 import AlertsPage from './alerts/page'
 import PerformancePage from './performance/page'
@@ -47,6 +48,7 @@ export const router = createBrowserRouter([
                   { path: 'projects', element: <ProjectsPage /> },
                   { path: 'issues', element: <IssuesPage /> },
                   { path: 'issues/:id', element: <IssueDetailPage /> },
+                  { path: 'logs', element: <LogsPage /> },
                   { path: 'performance', element: <PerformancePage /> },
                   { path: 'performance/:name', element: <TransactionDetailPage /> },
                   { path: 'traces/:traceId', element: <TracePage /> },

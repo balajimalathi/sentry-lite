@@ -61,6 +61,7 @@ type TraceDetail struct {
 	TraceID      string        `json:"trace_id"`
 	Transactions []Transaction `json:"transactions"`
 	Issues       []TraceIssue  `json:"issues"`
+	Logs         []Log         `json:"logs"`
 }
 
 type InsertTransactionInput struct {
@@ -301,7 +302,14 @@ func (s *Store) GetTrace(ctx context.Context, traceID string) (*TraceDetail, err
 	if txs == nil {
 		txs = []Transaction{}
 	}
-	return &TraceDetail{TraceID: traceID, Transactions: txs, Issues: issues}, nil
+	logs, err := s.ListLogsForTrace(ctx, traceID, MaxLogLimit)
+	if err != nil {
+		return nil, err
+	}
+	if logs == nil {
+		logs = []Log{}
+	}
+	return &TraceDetail{TraceID: traceID, Transactions: txs, Issues: issues, Logs: logs}, nil
 }
 
 func (s *Store) RecomputeTransactionStats(ctx context.Context, windowSec int) error {

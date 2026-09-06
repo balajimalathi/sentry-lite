@@ -25,10 +25,12 @@ type Handler struct {
 }
 
 type IngestMessage struct {
-	ProjectID int64           `json:"project_id"`
-	EventID   string          `json:"event_id"`
-	Kind      string          `json:"kind"` // error | transaction
-	Payload   json.RawMessage `json:"payload"`
+	ProjectID   int64           `json:"project_id"`
+	EventID     string          `json:"event_id"`
+	Kind        string          `json:"kind"` // error | transaction | log
+	Payload     json.RawMessage `json:"payload"`
+	Environment string          `json:"environment,omitempty"`
+	Release     string          `json:"release,omitempty"`
 }
 
 func (h *Handler) Routes(r chi.Router) {
@@ -63,7 +65,7 @@ func (h *Handler) HandleEnvelope(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eventJSON, eventID, kind, err := extractEventFromEnvelope(body)
+	parsed, err := parseEnvelope(body)
 	if err != nil {
 		// Non-event envelopes (session, client_report, etc.) — ack without enqueue
 		log.Printf("envelope skip: %v", err)
@@ -72,23 +74,70 @@ func (h *Handler) HandleEnvelope(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{}`))
 		return
 	}
-	if eventID == "" {
-		eventID = strings.ReplaceAll(uuid.NewString(), "-", "")
-		var m map[string]any
-		if json.Unmarshal(eventJSON, &m) == nil {
-			m["event_id"] = eventID
-			if b, err := json.Marshal(m); err == nil {
-				eventJSON = b
+
+	ackID := parsed.EventID
+	enqueued := 0
+	for _, it := range parsed.Items {
+		switch it.Type {
+		case "event", "transaction":
+			kind := "error"
+			if it.Type == "transaction" {
+				kind = "transaction"
 			}
+			payload := json.RawMessage(bytes.Clone(it.Payload))
+			eventID := ""
+			var m map[string]any
+			if json.Unmarshal(payload, &m) == nil {
+				if id, ok := m["event_id"].(string); ok {
+					eventID = strings.ReplaceAll(id, "-", "")
+				}
+				if it.Type == "event" && kindFromPayload(m) == "transaction" {
+					kind = "transaction"
+				}
+			}
+			if eventID == "" {
+				eventID = newEventID()
+				if m == nil {
+					m = map[string]any{}
+				}
+				m["event_id"] = eventID
+				if b, err := json.Marshal(m); err == nil {
+					payload = b
+				}
+			}
+			if err := h.enqueue(r.Context(), projectID, eventID, kind, payload, "", ""); err != nil {
+				log.Printf("enqueue: %v", err)
+				http.Error(w, "enqueue failed", http.StatusServiceUnavailable)
+				return
+			}
+			if ackID == "" {
+				ackID = eventID
+			}
+			enqueued++
+		case "log":
+			eventID := newEventID()
+			if err := h.enqueue(r.Context(), projectID, eventID, "log", json.RawMessage(bytes.Clone(it.Payload)), parsed.Environment, parsed.Release); err != nil {
+				log.Printf("enqueue: %v", err)
+				http.Error(w, "enqueue failed", http.StatusServiceUnavailable)
+				return
+			}
+			if ackID == "" {
+				ackID = eventID
+			}
+			enqueued++
 		}
 	}
-
-	if err := h.enqueue(r.Context(), projectID, eventID, kind, eventJSON); err != nil {
-		log.Printf("enqueue: %v", err)
-		http.Error(w, "enqueue failed", http.StatusServiceUnavailable)
+	if enqueued == 0 {
+		log.Printf("envelope skip: %v", errInvalidEnvelope)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{}`))
 		return
 	}
-	writeEventID(w, eventID)
+	if ackID == "" {
+		ackID = newEventID()
+	}
+	writeEventID(w, ackID)
 }
 
 func (h *Handler) HandleStore(w http.ResponseWriter, r *http.Request) {
@@ -129,7 +178,7 @@ func (h *Handler) HandleStore(w http.ResponseWriter, r *http.Request) {
 		body, _ = json.Marshal(m)
 	}
 
-	if err := h.enqueue(r.Context(), projectID, eventID, kindFromPayload(m), body); err != nil {
+	if err := h.enqueue(r.Context(), projectID, eventID, kindFromPayload(m), body, "", ""); err != nil {
 		log.Printf("enqueue: %v", err)
 		http.Error(w, "enqueue failed", http.StatusServiceUnavailable)
 		return
@@ -137,11 +186,18 @@ func (h *Handler) HandleStore(w http.ResponseWriter, r *http.Request) {
 	writeEventID(w, eventID)
 }
 
-func (h *Handler) enqueue(ctx context.Context, projectID int64, eventID, kind string, payload []byte) error {
+func (h *Handler) enqueue(ctx context.Context, projectID int64, eventID, kind string, payload []byte, environment, release string) error {
 	if kind == "" {
 		kind = "error"
 	}
-	msg := IngestMessage{ProjectID: projectID, EventID: eventID, Kind: kind, Payload: payload}
+	msg := IngestMessage{
+		ProjectID:   projectID,
+		EventID:     eventID,
+		Kind:        kind,
+		Payload:     payload,
+		Environment: environment,
+		Release:     release,
+	}
 	b, err := json.Marshal(msg)
 	if err != nil {
 		return err
@@ -189,15 +245,30 @@ func extractPublicKey(r *http.Request) string {
 	return ""
 }
 
-func extractEventFromEnvelope(body []byte) (json.RawMessage, string, string, error) {
+type envelopeItem struct {
+	Type    string
+	Payload []byte
+}
+
+type parsedEnvelope struct {
+	EventID     string
+	Environment string
+	Release     string
+	Items       []envelopeItem
+}
+
+func parseEnvelope(body []byte) (*parsedEnvelope, error) {
 	// Envelope: <header>\n then repeating <item_header>\n<payload>\n
 	offset := 0
-	// skip envelope header line
 	idx := bytes.IndexByte(body[offset:], '\n')
 	if idx < 0 {
-		return nil, "", "", errInvalidEnvelope
+		return nil, errInvalidEnvelope
 	}
+	headerLine := body[offset : offset+idx]
 	offset += idx + 1
+
+	out := &parsedEnvelope{}
+	out.EventID, out.Environment, out.Release = envelopeHeaderMeta(headerLine)
 
 	for offset < len(body) {
 		if body[offset] == '\n' {
@@ -208,10 +279,10 @@ func extractEventFromEnvelope(body []byte) (json.RawMessage, string, string, err
 		if idx < 0 {
 			break
 		}
-		headerLine := body[offset : offset+idx]
+		itemHeader := body[offset : offset+idx]
 		offset += idx + 1
 		var itemHdr map[string]any
-		if err := json.Unmarshal(headerLine, &itemHdr); err != nil {
+		if err := json.Unmarshal(itemHeader, &itemHdr); err != nil {
 			continue
 		}
 		typ, _ := itemHdr["type"].(string)
@@ -225,7 +296,7 @@ func extractEventFromEnvelope(body []byte) (json.RawMessage, string, string, err
 		if length > 0 {
 			end := offset + length
 			if end > len(body) {
-				return nil, "", "", errInvalidEnvelope
+				return nil, errInvalidEnvelope
 			}
 			payload = body[offset:end]
 			offset = end
@@ -242,26 +313,42 @@ func extractEventFromEnvelope(body []byte) (json.RawMessage, string, string, err
 				offset += idx + 1
 			}
 		}
+		out.Items = append(out.Items, envelopeItem{Type: typ, Payload: bytes.Clone(payload)})
+	}
+	if len(out.Items) == 0 {
+		return nil, errInvalidEnvelope
+	}
+	return out, nil
+}
 
-		if typ == "event" || typ == "transaction" {
-			kind := "error"
-			if typ == "transaction" {
-				kind = "transaction"
-			}
-			eventID := ""
-			var m map[string]any
-			if json.Unmarshal(payload, &m) == nil {
-				if id, ok := m["event_id"].(string); ok {
-					eventID = strings.ReplaceAll(id, "-", "")
-				}
-				if typ == "event" && kindFromPayload(m) == "transaction" {
-					kind = "transaction"
-				}
-			}
-			return json.RawMessage(bytes.Clone(payload)), eventID, kind, nil
+func envelopeHeaderMeta(header []byte) (eventID, env, release string) {
+	var m map[string]any
+	if json.Unmarshal(header, &m) != nil {
+		return "", "", ""
+	}
+	if id, ok := m["event_id"].(string); ok {
+		eventID = strings.ReplaceAll(id, "-", "")
+	}
+	env = headerString(m["environment"])
+	release = headerString(m["release"])
+	if trace, ok := m["trace"].(map[string]any); ok {
+		if env == "" {
+			env = headerString(trace["environment"])
+		}
+		if release == "" {
+			release = headerString(trace["release"])
 		}
 	}
-	return nil, "", "", errInvalidEnvelope
+	return eventID, env, release
+}
+
+func headerString(v any) string {
+	s, _ := v.(string)
+	return s
+}
+
+func newEventID() string {
+	return strings.ReplaceAll(uuid.NewString(), "-", "")
 }
 
 func kindFromPayload(m map[string]any) string {
@@ -276,7 +363,7 @@ func kindFromPayload(m map[string]any) string {
 	return "error"
 }
 
-var errInvalidEnvelope = &parseError{"no event item"}
+var errInvalidEnvelope = &parseError{"no ingestible item"}
 
 type parseError struct{ msg string }
 

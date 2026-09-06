@@ -54,6 +54,7 @@ func (h *Handler) Routes(r chi.Router) {
 		r.Get("/transactions", h.ListTransactions)
 		r.Get("/transaction", h.GetTransaction)
 		r.Get("/traces/{traceID}", h.GetTrace)
+		r.Get("/logs", h.ListLogs)
 
 		r.Get("/crons", h.ListCrons)
 		r.Post("/crons", h.CreateCron)
@@ -647,6 +648,30 @@ func (h *Handler) GetTrace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, detail)
+}
+
+func (h *Handler) ListLogs(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	projectID, _ := strconv.ParseInt(q.Get("project_id"), 10, 64)
+	if projectID <= 0 {
+		http.Error(w, "project_id required", http.StatusBadRequest)
+		return
+	}
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	list, err := h.Store.ListLogs(r.Context(), store.LogListFilter{
+		ProjectID: projectID,
+		Level:     q.Get("level"),
+		Q:         q.Get("q"),
+		Limit:     limit,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if list == nil {
+		list = []store.Log{}
+	}
+	writeJSON(w, list)
 }
 
 func (h *Handler) ListCrons(w http.ResponseWriter, r *http.Request) {

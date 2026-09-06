@@ -77,10 +77,13 @@ export default function TracePage() {
           <Skeleton className="h-8 w-1/2" />
           <Skeleton className="h-48 w-full" />
         </div>
-      ) : !detail || detail.transactions.length === 0 ? (
+      ) : !detail ||
+        (detail.transactions.length === 0 &&
+          detail.issues.length === 0 &&
+          (detail.logs?.length ?? 0) === 0) ? (
         <PageEmpty
-          title="No spans in this trace"
-          description="This trace id has no stored transactions yet."
+          title="No data in this trace"
+          description="This trace id has no stored transactions, issues, or logs yet."
         />
       ) : (
         <>
@@ -102,45 +105,83 @@ export default function TracePage() {
             </div>
           )}
 
-          <div className="flex flex-col gap-3">
-            <h2 className="text-lg font-medium">Waterfall</h2>
-            <TraceWaterfall transactions={detail.transactions} />
-          </div>
-
-          <div className="flex flex-col gap-4">
-            <h2 className="text-lg font-medium">Transactions</h2>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Duration</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Time</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {detail.transactions.map((t) => (
-                  <TableRow key={t.event_id}>
-                    <TableCell>
-                      <Link
-                        to={`/performance/${encodeURIComponent(t.name)}?project_id=${t.project_id}`}
-                        className="font-mono text-sm underline-offset-4 hover:underline"
-                      >
-                        {t.name}
-                      </Link>
-                    </TableCell>
-                    <TableCell>{fmtMs(t.duration_ms)}</TableCell>
-                    <TableCell>{t.status || '—'}</TableCell>
-                    <TableCell className="text-muted-foreground">
-                      <span title={formatTime(t.timestamp)}>
-                        {formatRelativeTime(t.timestamp)}
-                      </span>
-                    </TableCell>
+          {(detail.logs?.length ?? 0) > 0 && (
+            <div className="flex flex-col gap-3">
+              <h2 className="text-lg font-medium">Logs</h2>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Time</TableHead>
+                    <TableHead>Level</TableHead>
+                    <TableHead>Message</TableHead>
+                    <TableHead>Origin</TableHead>
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
+                </TableHeader>
+                <TableBody>
+                  {detail.logs!.map((log) => (
+                    <TableRow key={log.id}>
+                      <TableCell className="text-muted-foreground">
+                        <span title={formatTime(log.timestamp)}>
+                          {formatRelativeTime(log.timestamp)}
+                        </span>
+                      </TableCell>
+                      <TableCell>{log.level}</TableCell>
+                      <TableCell className="max-w-xl">
+                        <span className="line-clamp-2">{log.body || '—'}</span>
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {log.origin || '—'}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+
+          {detail.transactions.length > 0 && (
+            <div className="flex flex-col gap-3">
+              <h2 className="text-lg font-medium">Waterfall</h2>
+              <TraceWaterfall transactions={detail.transactions} />
+            </div>
+          )}
+
+          {detail.transactions.length > 0 && (
+            <div className="flex flex-col gap-4">
+              <h2 className="text-lg font-medium">Transactions</h2>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Duration</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead>Time</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {detail.transactions.map((t) => (
+                    <TableRow key={t.event_id}>
+                      <TableCell>
+                        <Link
+                          to={`/performance/${encodeURIComponent(t.name)}?project_id=${t.project_id}`}
+                          className="font-mono text-sm underline-offset-4 hover:underline"
+                        >
+                          {t.name}
+                        </Link>
+                      </TableCell>
+                      <TableCell>{fmtMs(t.duration_ms)}</TableCell>
+                      <TableCell>{t.status || '—'}</TableCell>
+                      <TableCell className="text-muted-foreground">
+                        <span title={formatTime(t.timestamp)}>
+                          {formatRelativeTime(t.timestamp)}
+                        </span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
         </>
       )}
     </section>

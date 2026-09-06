@@ -123,10 +123,27 @@ export type TransactionSample = {
   spans?: Span[]
 }
 
+export type LogEntry = {
+  id: number
+  project_id: number
+  timestamp: string
+  level: string
+  body: string
+  trace_id: string
+  span_id: string
+  severity_number: number
+  environment: string | null
+  release: string | null
+  origin: string
+  payload_json?: string
+  attributes?: Record<string, unknown>
+}
+
 export type TraceDetail = {
   trace_id: string
   transactions: TransactionSample[]
   issues: Array<{ issue_id: number; title: string; event_id: string }>
+  logs?: LogEntry[]
 }
 
 export type CronMonitor = {
@@ -350,6 +367,14 @@ export const api = {
     ),
   trace: (traceId: string) =>
     get<TraceDetail>(`/api/internal/traces/${encodeURIComponent(traceId)}`),
+  logs: (params: { project_id: string; level?: string; q?: string; limit?: string }) => {
+    const q = new URLSearchParams()
+    q.set('project_id', params.project_id)
+    if (params.level) q.set('level', params.level)
+    if (params.q) q.set('q', params.q)
+    if (params.limit) q.set('limit', params.limit)
+    return get<LogEntry[]>(`/api/internal/logs?${q}`)
+  },
   crons: (projectId?: string) =>
     get<CronMonitor[]>(
       projectId

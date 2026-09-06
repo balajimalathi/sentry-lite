@@ -1,6 +1,6 @@
 # examples/nextjs playground (not required for drop-in)
 
-The Next.js example is a feature playground against a local sentry-lite instance. Do **not** copy this into a product app unless the user asked to exercise Issues / Performance / Crons / Alerts.
+The Next.js example is a feature playground against a local sentry-lite instance. Do **not** copy this into a product app unless the user asked to exercise Issues / Logs / Performance / Crons / Alerts.
 
 Canonical package: `examples/nextjs` (`@sentry/nextjs`, Next.js App Router). Inspect with:
 
@@ -24,7 +24,13 @@ graft skeleton examples/nextjs/app/actions.ts
 | `components/feature-playground.tsx` | UI to fire each feature |
 | `.env.example` | `NEXT_PUBLIC_SENTRY_DSN`, `SENTRY_LITE_URL`, `CRON_CHECKIN_TOKEN` |
 
-Demo init in the example hard-codes `environment: "development"`, `release: "sample@0.1.0"`, `tags.service: "sample"`. Product apps should use real env/release (see SKILL.md).
+Demo init in the example hard-codes `environment: "development"`, `release: "sample@0.1.0"`, `tags.service: "sample"`, `enableLogs: true`, and `consoleLoggingIntegration`. Product apps should use real env/release (see SKILL.md).
+
+## Logs
+
+`enableLogs` + `Sentry.consoleLoggingIntegration` send `log` envelope items. They appear under **Logs**, not Issues. Error-level console lines stay logs.
+
+Client and server playground buttons fire `console.log` / `info` / `warn` / `error` then `Sentry.flush(2000)`.
 
 ## Mock APIs / performance
 
